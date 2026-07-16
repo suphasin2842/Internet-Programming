@@ -1,23 +1,41 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
-import { FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
-const initialProducts = [
-  { id: '1', name: 'Monkey Doll', price: 2500, image: 'https://i5.walmartimages.com/seo/Realistic-Monkey-Doll-16-inches-Animal-Soft_138da632-b523-45a0-a698-14057660a631.7266d28f600ca50bde545e75d8199e7c.jpeg?odnHeight=768&odnWidth=768&odnBg=FFFFFF' },
-  { id: '2', name: 'proboscis monkey doll', price: 1200, image: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSkYe5tIV9v-WecJrXJdFfoC2s5SQeVt5dJdICUj0FczBkXHpNaTo38Fes&s=10' },
-  { id: '3', name: 'orangutan doll', price: 1290, image: 'https://www.ikea.com/th/en/images/products/djungelskog-soft-toy-orangutan__0710167_pe727369_s5.jpg?f=s' },
-  { id: '4', name: 'gorilla doll', price: 990, image: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTpfly6QeBJK8WFqCRPQEwzt8EKil-UnBxXwYbIKnr5tL0GeoMynoUedxc&s=10' },
-];
+// ----------------------------------------------------
+// 1. นำ URL แบบ Raw จาก GitHub ของคุณมาใส่ตรงนี้
+// ----------------------------------------------------
+const PRODUCTS_URL = 'https://raw.githubusercontent.com/suphasin2842/Internet-Programming/refs/heads/main/products.json';
 
 export default function HomeScreen() {
   const router = useRouter();
   const [search, setSearch] = useState('');
-  const [products, setProducts] = useState(initialProducts);
   
-  // ✅ สร้าง State สำหรับเปิด/ปิดกล่องจัดเรียง
+  // 2. ตั้งค่า State สำหรับเก็บข้อมูลสินค้า โดยเริ่มจาก Array ว่างๆ []
+  const [products, setProducts] = useState<any[]>([]);
   const [showSort, setShowSort] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); // ตัวแปรสำหรับเช็กสถานะกำลังโหลด
 
+  // ----------------------------------------------------
+  // 3. ใช้ useEffect เพื่อทำการ Fetch ข้อมูลเมื่อเปิดหน้านี้ขึ้นมา
+  // ----------------------------------------------------
+  useEffect(() => {
+    async function loadProducts() {
+      try {
+        const response = await fetch(PRODUCTS_URL);
+        const data = await response.json();
+        setProducts(data); // นำข้อมูล JSON มาเก็บลง State
+      } catch (error) {
+        console.error("Error fetching products:", error);
+      } finally {
+        setIsLoading(false); // ปิดตัวโหลดดิ้งเมื่อดึงข้อมูลเสร็จ
+      }
+    }
+    loadProducts();
+  }, []);
+
+  // ฟังก์ชันเรียงราคา
   const sortPrices = (type: 'asc' | 'desc') => {
     const sorted = [...products].sort((a, b) => {
       return type === 'asc' ? a.price - b.price : b.price - a.price;
@@ -26,6 +44,7 @@ export default function HomeScreen() {
     setShowSort(false); // กดเลือกเสร็จแล้วให้ปิดกล่อง
   };
 
+  // คอมโพเนนต์แสดงการ์ดสินค้า
   const renderProduct = ({ item }: any) => (
     <TouchableOpacity 
       style={styles.productCard}
@@ -44,7 +63,7 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 1. ค้นหา & เพิ่มสินค้า */}
+      {/* 1. เครื่องมือค้นหา & เพิ่มสินค้า */}
       <View style={styles.toolsRow}>
         <View style={styles.searchBox}>
           <Ionicons name="search" size={20} color="#8B5A2B" />
@@ -61,7 +80,7 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* 2. ฟีเจอร์: ปุ่มกดเพื่อโชว์กล่องคัดเรียงราคา */}
+      {/* 2. ฟีเจอร์: ปุ่มกดคัดเรียงราคา */}
       <View style={styles.filterSection}>
         <TouchableOpacity 
           style={styles.sortToggleButton} 
@@ -72,7 +91,6 @@ export default function HomeScreen() {
           <Ionicons name={showSort ? "chevron-up" : "chevron-down"} size={16} color="#FFF" />
         </TouchableOpacity>
 
-        {/* กล่องจะโชว์ก็ต่อเมื่อ showSort เป็น true */}
         {showSort && (
           <View style={styles.dropdownBox}>
             <TouchableOpacity style={styles.dropdownItem} onPress={() => sortPrices('asc')}>
@@ -87,14 +105,22 @@ export default function HomeScreen() {
       </View>
 
       {/* 3. รายการสินค้า */}
-      <FlatList
-        data={products}
-        keyExtractor={(item) => item.id}
-        renderItem={renderProduct}
-        numColumns={2}
-        contentContainerStyle={styles.productList}
-        showsVerticalScrollIndicator={false}
-      />
+      {/* ถ้ากำลังโหลด ให้โชว์ตัวหมุน ถ้าโหลดเสร็จแล้ว ให้โชว์ตารางสินค้า */}
+      {isLoading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#4C9A2A" />
+          <Text style={styles.loadingText}>กำลังโหลดตุ๊กตาลิง...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={products}
+          keyExtractor={(item) => item.id}
+          renderItem={renderProduct}
+          numColumns={2}
+          contentContainerStyle={styles.productList}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </View>
   );
 }
@@ -106,7 +132,6 @@ const styles = StyleSheet.create({
   searchInput: { flex: 1, marginLeft: 10, color: '#2E4F4F', fontSize: 16 },
   addButton: { backgroundColor: '#8B5A2B', width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center' },
   
-  // สไตล์สำหรับปุ่มจัดเรียงและกล่อง Dropdown
   filterSection: { paddingHorizontal: 15, marginBottom: 10, zIndex: 10 },
   sortToggleButton: { flexDirection: 'row', backgroundColor: '#4C9A2A', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 20, alignSelf: 'flex-start', alignItems: 'center', gap: 5 },
   sortToggleText: { color: '#FFF', fontSize: 14, fontWeight: 'bold' },
@@ -114,6 +139,9 @@ const styles = StyleSheet.create({
   dropdownItem: { padding: 10 },
   dropdownText: { color: '#2E4F4F', fontSize: 14 },
   divider: { height: 1, backgroundColor: '#E0E0E0', marginHorizontal: 5 },
+
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { color: '#4C9A2A', marginTop: 10, fontSize: 16, fontWeight: 'bold' },
 
   productList: { paddingHorizontal: 10, paddingBottom: 20 },
   productCard: { flex: 1, backgroundColor: '#FFF', margin: 5, borderRadius: 15, overflow: 'hidden', elevation: 3 },
