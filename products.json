@@ -1,0 +1,26 @@
+[
+  {
+    "id": "1",
+    "name": "Monkey Doll",
+    "price": 2500,
+    "image": "https://i5.walmartimages.com/seo/Realistic-Monkey-Doll-16-inches-Animal-Soft_138da632-b523-45a0-a698-14057660a631.7266d28f600ca50bde545e75d8199e7c.jpeg?odnHeight=768&odnWidth=768&odnBg=FFFFFF" 
+  },
+  {
+    "id": "2",
+    "name": "proboscis monkey",
+    "price": 1200,
+    "image": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcSkYe5tIV9v-WecJrXJdFfoC2s5SQeVt5dJdICUj0FczBkXHpNaTo38Fes&s=10"
+  },
+  {
+    "id": "3",
+    "name": "orangutan doll",
+    "price": 1290,
+    "image": "https://www.ikea.com/th/en/images/products/djungelskog-soft-toy-orangutan__0710167_pe727369_s5.jpg?f=s"
+  },
+  {
+    "id": "4",
+    "name": "gorilla doll",
+    "price": 990,
+    "image": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTpfly6QeBJK8WFqCRPQEwzt8EKil-UnBxXwYbIKnr5tL0GeoMynoUedxc&s=10"
+  }
+]
