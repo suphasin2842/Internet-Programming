@@ -4,28 +4,27 @@ import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 // ----------------------------------------------------
-// 1. นำ URL แบบ Raw จาก GitHub ของคุณมาใส่ตรงนี้
+// 1. เปลี่ยน URL มาดึงข้อมูลจาก Cloud API ของคุณ (ใช้ Port 3045)
 // ----------------------------------------------------
-const PRODUCTS_URL = 'https://raw.githubusercontent.com/suphasin2842/Internet-Programming/refs/heads/main/products.json';
+const PRODUCTS_URL = 'http://119.59.102.161:3045/api/products';
 
 export default function HomeScreen() {
   const router = useRouter();
   const [search, setSearch] = useState('');
   
-  // 2. ตั้งค่า State สำหรับเก็บข้อมูลสินค้า โดยเริ่มจาก Array ว่างๆ []
   const [products, setProducts] = useState<any[]>([]);
   const [showSort, setShowSort] = useState(false);
-  const [isLoading, setIsLoading] = useState(true); // ตัวแปรสำหรับเช็กสถานะกำลังโหลด
+  const [isLoading, setIsLoading] = useState(true);
 
   // ----------------------------------------------------
-  // 3. ใช้ useEffect เพื่อทำการ Fetch ข้อมูลเมื่อเปิดหน้านี้ขึ้นมา
+  // 2. ฟังก์ชัน Fetch ข้อมูลจาก Database
   // ----------------------------------------------------
   useEffect(() => {
     async function loadProducts() {
       try {
         const response = await fetch(PRODUCTS_URL);
         const data = await response.json();
-        setProducts(data); // นำข้อมูล JSON มาเก็บลง State
+        setProducts(data); // นำข้อมูล JSON ที่ได้จาก DB มาเก็บลง State
       } catch (error) {
         console.error("Error fetching products:", error);
       } finally {
@@ -35,16 +34,20 @@ export default function HomeScreen() {
     loadProducts();
   }, []);
 
-  // ฟังก์ชันเรียงราคา
+  // ฟังก์ชันเรียงราคา (แปลงค่า price จาก DB ให้เป็นตัวเลขก่อนนำมาคำนวณ)
   const sortPrices = (type: 'asc' | 'desc') => {
     const sorted = [...products].sort((a, b) => {
-      return type === 'asc' ? a.price - b.price : b.price - a.price;
+      const priceA = parseFloat(a.price);
+      const priceB = parseFloat(b.price);
+      return type === 'asc' ? priceA - priceB : priceB - priceA;
     });
     setProducts(sorted);
-    setShowSort(false); // กดเลือกเสร็จแล้วให้ปิดกล่อง
+    setShowSort(false);
   };
 
-  // คอมโพเนนต์แสดงการ์ดสินค้า
+  // ----------------------------------------------------
+  // 3. คอมโพเนนต์แสดงการ์ดสินค้า (เปลี่ยนชื่อตัวแปรให้ตรงกับตารางใหม่)
+  // ----------------------------------------------------
   const renderProduct = ({ item }: any) => (
     <TouchableOpacity 
       style={styles.productCard}
@@ -53,9 +56,12 @@ export default function HomeScreen() {
         params: { id: item.id }
       })}
     >
-      <Image source={{ uri: item.image }} style={styles.productImage} />
+      {/* ใช้ item.image_url แทน item.image */}
+      <Image source={{ uri: item.image_url }} style={styles.productImage} />
+      
       <View style={styles.productInfo}>
-        <Text style={styles.productName} numberOfLines={1}>{item.name}</Text>
+        {/* ใช้ item.product_name แทน item.name */}
+        <Text style={styles.productName} numberOfLines={1}>{item.product_name}</Text>
         <Text style={styles.productPrice}>฿{item.price}</Text>
       </View>
     </TouchableOpacity>
@@ -63,7 +69,7 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 1. เครื่องมือค้นหา & เพิ่มสินค้า */}
+      {/* เครื่องมือค้นหา & เพิ่มสินค้า */}
       <View style={styles.toolsRow}>
         <View style={styles.searchBox}>
           <Ionicons name="search" size={20} color="#8B5A2B" />
@@ -80,7 +86,7 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* 2. ฟีเจอร์: ปุ่มกดคัดเรียงราคา */}
+      {/* ฟีเจอร์: ปุ่มกดคัดเรียงราคา */}
       <View style={styles.filterSection}>
         <TouchableOpacity 
           style={styles.sortToggleButton} 
@@ -104,17 +110,16 @@ export default function HomeScreen() {
         )}
       </View>
 
-      {/* 3. รายการสินค้า */}
-      {/* ถ้ากำลังโหลด ให้โชว์ตัวหมุน ถ้าโหลดเสร็จแล้ว ให้โชว์ตารางสินค้า */}
+      {/* แสดงผลรายการสินค้า */}
       {isLoading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#4C9A2A" />
-          <Text style={styles.loadingText}>กำลังโหลดตุ๊กตาลิง...</Text>
+          <Text style={styles.loadingText}>กำลังโหลดตุ๊กตาลิงจาก Cloud...</Text>
         </View>
       ) : (
         <FlatList
           data={products}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.id.toString()}
           renderItem={renderProduct}
           numColumns={2}
           contentContainerStyle={styles.productList}
@@ -145,7 +150,7 @@ const styles = StyleSheet.create({
 
   productList: { paddingHorizontal: 10, paddingBottom: 20 },
   productCard: { flex: 1, backgroundColor: '#FFF', margin: 5, borderRadius: 15, overflow: 'hidden', elevation: 3 },
-  productImage: { width: '100%', height: 150 },
+  productImage: { width: '100%', height: 150, resizeMode: 'cover' },
   productInfo: { padding: 10, backgroundColor: '#F1F8E9' },
   productName: { fontSize: 16, color: '#2E4F4F', fontWeight: 'bold' },
   productPrice: { fontSize: 14, color: '#8B5A2B', marginTop: 5 },
