@@ -3,6 +3,12 @@
 # dependencies
 node_modules/
 
+# package-manager and test caches
+.npm/
+.yarn/
+.pnpm-store/
+coverage/
+
 # Expo
 .expo/
 dist/
@@ -16,22 +22,39 @@ expo-env.d.ts
 *.p8
 *.p12
 *.key
+*.keystore
 *.mobileprovision
 
 # Metro
 .metro-health-check*
 
 # debug
+*.log
 npm-debug.*
 yarn-debug.*
 yarn-error.*
+
+# temporary files
+tmp/
+temp/
+*.tmp
 
 # macOS
 .DS_Store
 *.pem
 
-# local env files
-.env*.local
+# Windows
+Thumbs.db
+Desktop.ini
+
+# editor-specific local settings
+.vscode/
+.idea/
+
+# local env files and secrets
+.env
+.env.*
+!.env.example
 
 # typescript
 *.tsbuildinfo
