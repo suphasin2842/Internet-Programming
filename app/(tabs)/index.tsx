@@ -1,157 +1,361 @@
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, FlatList, Image, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Image } from 'expo-image';
+import { Link, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
-// ----------------------------------------------------
-// 1. เปลี่ยน URL มาดึงข้อมูลจาก Cloud API ของคุณ (ใช้ Port 3045)
-// ----------------------------------------------------
-const PRODUCTS_URL = 'http://119.59.102.161:3045/api/products';
+import { StoreColors, StoreRadii } from '@/constants/store-theme';
+import { API_BASE_URL } from '@/constants/api';
+
+const PRODUCTS_URL = `${API_BASE_URL}/api/products`;
+
+type Product = {
+  id: string | number;
+  product_name: string;
+  price: string | number;
+  image_url: string;
+};
+
+const categories = [
+  { name: 'Jungle', icon: 'leaf' as const, color: StoreColors.electric },
+  { name: 'Space', icon: 'rocket' as const, color: StoreColors.lavender },
+  { name: 'Robot', icon: 'hardware-chip' as const, color: StoreColors.peach },
+  { name: 'อื่นๆ', icon: 'star' as const, color: '#FFF3A8' },
+];
+
+function formatPrice(price: Product['price']) {
+  const value = Number(price);
+  return `${Number.isFinite(value) ? value.toLocaleString('th-TH') : price} THB`;
+}
 
 export default function HomeScreen() {
-  const router = useRouter();
+  const { width } = useWindowDimensions();
+  const [isHydrated, setIsHydrated] = useState(false);
+  const isDesktop = isHydrated && width >= 900;
+  const columns = isHydrated && width >= 1180 ? 4 : isHydrated && width >= 720 ? 3 : 2;
+  const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
-  
-  const [products, setProducts] = useState<any[]>([]);
-  const [showSort, setShowSort] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // ----------------------------------------------------
-  // 2. ฟังก์ชัน Fetch ข้อมูลจาก Database
-  // ----------------------------------------------------
-  useEffect(() => {
-    async function loadProducts() {
-      try {
-        const response = await fetch(PRODUCTS_URL);
-        const data = await response.json();
-        setProducts(data); // นำข้อมูล JSON ที่ได้จาก DB มาเก็บลง State
-      } catch (error) {
-        console.error("Error fetching products:", error);
-      } finally {
-        setIsLoading(false); // ปิดตัวโหลดดิ้งเมื่อดึงข้อมูลเสร็จ
-      }
+  const loadProducts = useCallback(async (refresh = false) => {
+    if (refresh) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
     }
-    loadProducts();
+    setError(null);
+
+    try {
+      const response = await fetch(PRODUCTS_URL);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data: Product[] = await response.json();
+      setProducts(data);
+    } catch {
+      setError('ยังเชื่อมต่อร้านค้าไม่ได้ กรุณาตรวจสอบ Cloud Server แล้วลองอีกครั้ง');
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
   }, []);
 
-  // ฟังก์ชันเรียงราคา (แปลงค่า price จาก DB ให้เป็นตัวเลขก่อนนำมาคำนวณ)
-  const sortPrices = (type: 'asc' | 'desc') => {
-    const sorted = [...products].sort((a, b) => {
-      const priceA = parseFloat(a.price);
-      const priceB = parseFloat(b.price);
-      return type === 'asc' ? priceA - priceB : priceB - priceA;
-    });
-    setProducts(sorted);
-    setShowSort(false);
-  };
+  useEffect(() => {
+    setIsHydrated(true);
+    loadProducts();
+  }, [loadProducts]);
 
-  // ----------------------------------------------------
-  // 3. คอมโพเนนต์แสดงการ์ดสินค้า (เปลี่ยนชื่อตัวแปรให้ตรงกับตารางใหม่)
-  // ----------------------------------------------------
-  const renderProduct = ({ item }: any) => (
-    <TouchableOpacity 
-      style={styles.productCard}
-      onPress={() => router.push({
-        pathname: '/product/[id]' as any,
-        params: { id: item.id }
-      })}
-    >
-      {/* ใช้ item.image_url แทน item.image */}
-      <Image source={{ uri: item.image_url }} style={styles.productImage} />
-      
-      <View style={styles.productInfo}>
-        {/* ใช้ item.product_name แทน item.name */}
-        <Text style={styles.productName} numberOfLines={1}>{item.product_name}</Text>
-        <Text style={styles.productPrice}>฿{item.price}</Text>
-      </View>
-    </TouchableOpacity>
-  );
+  const visibleProducts = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase('th');
+    if (!query) return products;
+    return products.filter((product) =>
+      product.product_name.toLocaleLowerCase('th').includes(query),
+    );
+  }, [products, search]);
 
   return (
-    <View style={styles.container}>
-      {/* เครื่องมือค้นหา & เพิ่มสินค้า */}
-      <View style={styles.toolsRow}>
-        <View style={styles.searchBox}>
-          <Ionicons name="search" size={20} color="#8B5A2B" />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="ค้นหาสิ่งของ..."
-            placeholderTextColor="#7b9e7b"
-            value={search}
-            onChangeText={setSearch}
+    <View style={styles.page}>
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={() => loadProducts(true)}
+            tintColor={StoreColors.jungle}
           />
+        }
+        contentContainerStyle={styles.scrollContent}>
+        <StoreHeader isDesktop={isDesktop} search={search} onSearchChange={setSearch} />
+
+        <View style={[styles.content, isDesktop && styles.desktopContent]}>
+          <Hero isDesktop={isDesktop} />
+
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>หมวดหมู่</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.categoryRow}>
+              {categories.map((category) => (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`หมวด ${category.name}`}
+                  key={category.name}
+                  style={({ pressed }) => [
+                    styles.categoryCard,
+                    { backgroundColor: category.color },
+                    pressed && styles.pressed,
+                  ]}>
+                  <View style={styles.categoryIcon}>
+                    <Ionicons name={category.icon} size={23} color={StoreColors.ink} />
+                  </View>
+                  <Text style={styles.categoryText}>{category.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </View>
+
+          <View style={styles.section}>
+            <View style={styles.sectionHeadingRow}>
+              <Text style={styles.sectionTitle}>สินค้าแนะนำ</Text>
+              {!!search && (
+                <Text style={styles.resultCount}>{visibleProducts.length} รายการ</Text>
+              )}
+            </View>
+
+            {isLoading ? (
+              <View style={styles.messageBox}>
+                <ActivityIndicator size="large" color={StoreColors.jungle} />
+                <Text style={styles.messageText}>กำลังเตรียมของเล่น...</Text>
+              </View>
+            ) : error ? (
+              <View style={styles.errorBox}>
+                <Ionicons name="cloud-offline-outline" size={36} color={StoreColors.danger} />
+                <Text selectable style={styles.errorText}>{error}</Text>
+                <ToyButton label="ลองอีกครั้ง" onPress={() => loadProducts()} compact />
+              </View>
+            ) : visibleProducts.length === 0 ? (
+              <View style={styles.messageBox}>
+                <Ionicons name="search-outline" size={38} color={StoreColors.jungle} />
+                <Text style={styles.messageText}>ไม่พบของเล่นที่ค้นหา</Text>
+              </View>
+            ) : (
+              <View style={styles.productGrid}>
+                {visibleProducts.map((product) => (
+                  <ProductCard key={String(product.id)} product={product} columns={columns} />
+                ))}
+              </View>
+            )}
+          </View>
         </View>
-        <TouchableOpacity style={styles.addButton} onPress={() => alert('เปิดหน้าเพิ่มสินค้า')}>
-          <Ionicons name="add" size={24} color="#FFF" />
-        </TouchableOpacity>
-      </View>
+      </ScrollView>
+    </View>
+  );
+}
 
-      {/* ฟีเจอร์: ปุ่มกดคัดเรียงราคา */}
-      <View style={styles.filterSection}>
-        <TouchableOpacity 
-          style={styles.sortToggleButton} 
-          onPress={() => setShowSort(!showSort)}
-        >
-          <Ionicons name="filter" size={16} color="#FFF" />
-          <Text style={styles.sortToggleText}>จัดเรียงสินค้า</Text>
-          <Ionicons name={showSort ? "chevron-up" : "chevron-down"} size={16} color="#FFF" />
-        </TouchableOpacity>
-
-        {showSort && (
-          <View style={styles.dropdownBox}>
-            <TouchableOpacity style={styles.dropdownItem} onPress={() => sortPrices('asc')}>
-              <Text style={styles.dropdownText}>ราคาน้อย ➔ มาก</Text>
-            </TouchableOpacity>
-            <View style={styles.divider} />
-            <TouchableOpacity style={styles.dropdownItem} onPress={() => sortPrices('desc')}>
-              <Text style={styles.dropdownText}>ราคามาก ➔ น้อย</Text>
-            </TouchableOpacity>
+function StoreHeader({
+  isDesktop,
+  search,
+  onSearchChange,
+}: {
+  isDesktop: boolean;
+  search: string;
+  onSearchChange: (value: string) => void;
+}) {
+  return (
+    <View style={styles.header}>
+      <View style={[styles.headerInner, isDesktop && styles.desktopHeaderInner]}>
+        {!isDesktop && <Ionicons name="menu" size={28} color={StoreColors.white} />}
+        <Text style={styles.brand}>PAN &amp; TOYS</Text>
+        {isDesktop && (
+          <View style={styles.desktopNav}>
+            <Text style={styles.activeNav}>หน้าหลัก</Text>
+            <Text style={styles.navText}>หมวดหมู่</Text>
+            <Text style={styles.navText}>สินค้าขายดี</Text>
+            <Text style={styles.navText}>สินค้าใหม่</Text>
           </View>
         )}
-      </View>
-
-      {/* แสดงผลรายการสินค้า */}
-      {isLoading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4C9A2A" />
-          <Text style={styles.loadingText}>กำลังโหลดตุ๊กตาลิงจาก Cloud...</Text>
+        {isDesktop && <SearchBox search={search} onSearchChange={onSearchChange} />}
+        <View style={styles.headerActions}>
+          <Link href={'/admin' as never} asChild>
+            <Pressable accessibilityLabel="จัดการสินค้า" style={styles.adminHeaderButton}>
+              <Ionicons name="settings-outline" size={22} color={StoreColors.white} />
+              {isDesktop && <Text style={styles.adminHeaderText}>จัดการสินค้า</Text>}
+            </Pressable>
+          </Link>
+          <Ionicons name="cart-outline" size={27} color={StoreColors.white} />
+          <Ionicons name="person-circle-outline" size={28} color={StoreColors.white} />
         </View>
-      ) : (
-        <FlatList
-          data={products}
-          keyExtractor={(item) => item.id.toString()}
-          renderItem={renderProduct}
-          numColumns={2}
-          contentContainerStyle={styles.productList}
-          showsVerticalScrollIndicator={false}
-        />
+      </View>
+      {!isDesktop && (
+        <View style={styles.mobileSearchWrap}>
+          <SearchBox search={search} onSearchChange={onSearchChange} />
+        </View>
       )}
     </View>
   );
 }
 
+function SearchBox({ search, onSearchChange }: { search: string; onSearchChange: (value: string) => void }) {
+  return (
+    <View style={styles.searchBox}>
+      <Ionicons name="search" size={21} color={StoreColors.ink} />
+      <TextInput
+        accessibilityLabel="ค้นหาของเล่น"
+        value={search}
+        onChangeText={onSearchChange}
+        placeholder="ค้นหาของเล่น..."
+        placeholderTextColor="#697871"
+        style={styles.searchInput}
+        returnKeyType="search"
+      />
+      {!!search && (
+        <Pressable accessibilityLabel="ล้างคำค้นหา" onPress={() => onSearchChange('')}>
+          <Ionicons name="close-circle" size={20} color="#697871" />
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
+function Hero({ isDesktop }: { isDesktop: boolean }) {
+  return (
+    <View style={[styles.hero, isDesktop ? styles.desktopHero : styles.mobileHero]}>
+      <View style={styles.heroCopy}>
+        <Text style={[styles.heroTitle, !isDesktop && styles.mobileHeroTitle]}>Monkey{`\n`}Jungle</Text>
+        <Text style={styles.heroDescription}>ผจญภัยในโลกของเล่นกลางป่า</Text>
+        <ToyButton label="ดูสินค้าใหม่" onPress={() => {}} compact />
+      </View>
+      <View style={styles.artPlaceholder}>
+        <View style={styles.artCircle}>
+          <Ionicons name="pencil" size={isDesktop ? 42 : 28} color="#9CB69D" />
+        </View>
+        <Ionicons name="leaf-outline" size={isDesktop ? 72 : 42} color="#B9CFBA" style={styles.heroLeaf} />
+      </View>
+    </View>
+  );
+}
+
+function ProductCard({ product, columns }: { product: Product; columns: number }) {
+  const width = `${100 / columns}%` as `${number}%`;
+  const router = useRouter();
+  return (
+    <View style={[styles.productSlot, { width }]}>
+      <Pressable
+        onPress={() => router.push({ pathname: '/product/[id]', params: { id: String(product.id) } })}
+        style={({ pressed }) => [styles.productCard, pressed && styles.pressed]}>
+          <Pressable
+            accessibilityLabel={`แก้ไข ${product.product_name}`}
+            onPress={(event) => {
+              event.stopPropagation();
+              router.push({ pathname: '/admin', params: { productId: String(product.id) } } as never);
+            }}
+            style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
+            <Ionicons name="pencil" size={17} color={StoreColors.ink} />
+          </Pressable>
+          <Image
+            source={{ uri: product.image_url }}
+            style={styles.productImage}
+            contentFit="cover"
+            transition={180}
+          />
+          <View style={styles.productMeta}>
+            <Text numberOfLines={2} style={styles.productName}>{product.product_name}</Text>
+            <Text style={styles.priceTag}>{formatPrice(product.price)}</Text>
+          </View>
+          <ToyButton label="เพิ่มลงตะกร้า" icon="cart-outline" onPress={() => {}} />
+      </Pressable>
+    </View>
+  );
+}
+
+function ToyButton({
+  label,
+  onPress,
+  icon,
+  compact = false,
+}: {
+  label: string;
+  onPress: () => void;
+  icon?: keyof typeof Ionicons.glyphMap;
+  compact?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.toyButton,
+        compact && styles.compactButton,
+        pressed && styles.toyButtonPressed,
+      ]}>
+      {icon && <Ionicons name={icon} size={17} color={StoreColors.ink} />}
+      <Text style={styles.toyButtonText}>{label}</Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#E8F5E9' },
-  toolsRow: { flexDirection: 'row', padding: 15, alignItems: 'center' },
-  searchBox: { flex: 1, flexDirection: 'row', backgroundColor: '#C8E6C9', borderRadius: 25, paddingHorizontal: 15, alignItems: 'center', height: 45, marginRight: 10 },
-  searchInput: { flex: 1, marginLeft: 10, color: '#2E4F4F', fontSize: 16 },
-  addButton: { backgroundColor: '#8B5A2B', width: 45, height: 45, borderRadius: 22.5, justifyContent: 'center', alignItems: 'center' },
-  
-  filterSection: { paddingHorizontal: 15, marginBottom: 10, zIndex: 10 },
-  sortToggleButton: { flexDirection: 'row', backgroundColor: '#4C9A2A', paddingVertical: 10, paddingHorizontal: 15, borderRadius: 20, alignSelf: 'flex-start', alignItems: 'center', gap: 5 },
-  sortToggleText: { color: '#FFF', fontSize: 14, fontWeight: 'bold' },
-  dropdownBox: { backgroundColor: '#FFF', marginTop: 5, borderRadius: 10, padding: 5, width: 150, elevation: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 5 },
-  dropdownItem: { padding: 10 },
-  dropdownText: { color: '#2E4F4F', fontSize: 14 },
-  divider: { height: 1, backgroundColor: '#E0E0E0', marginHorizontal: 5 },
-
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { color: '#4C9A2A', marginTop: 10, fontSize: 16, fontWeight: 'bold' },
-
-  productList: { paddingHorizontal: 10, paddingBottom: 20 },
-  productCard: { flex: 1, backgroundColor: '#FFF', margin: 5, borderRadius: 15, overflow: 'hidden', elevation: 3 },
-  productImage: { width: '100%', height: 150, resizeMode: 'cover' },
-  productInfo: { padding: 10, backgroundColor: '#F1F8E9' },
-  productName: { fontSize: 16, color: '#2E4F4F', fontWeight: 'bold' },
-  productPrice: { fontSize: 14, color: '#8B5A2B', marginTop: 5 },
+  page: { flex: 1, backgroundColor: StoreColors.mint },
+  scrollContent: { paddingBottom: 28 },
+  content: { width: '100%', padding: 14, gap: 22 },
+  desktopContent: { maxWidth: 1240, alignSelf: 'center', paddingHorizontal: 28, paddingVertical: 22, gap: 26 },
+  header: { backgroundColor: StoreColors.jungleDark, borderBottomWidth: 3, borderBottomColor: StoreColors.ink },
+  headerInner: { minHeight: 64, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 18 },
+  desktopHeaderInner: { width: '100%', maxWidth: 1240, alignSelf: 'center', minHeight: 82, paddingHorizontal: 28 },
+  brand: { color: StoreColors.white, fontSize: 25, fontWeight: '900', letterSpacing: -1 },
+  desktopNav: { flexDirection: 'row', alignItems: 'center', gap: 24, marginLeft: 20 },
+  navText: { color: StoreColors.white, fontWeight: '700', fontSize: 15 },
+  activeNav: { color: StoreColors.electric, fontWeight: '900', fontSize: 15, borderBottomWidth: 3, borderBottomColor: StoreColors.electric, paddingVertical: 10 },
+  headerActions: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center', gap: 15 },
+  adminHeaderButton: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8 },
+  adminHeaderText: { color: StoreColors.white, fontSize: 13, fontWeight: '800' },
+  mobileSearchWrap: { paddingHorizontal: 14, paddingBottom: 12 },
+  searchBox: { flex: 1, minWidth: 230, height: 46, backgroundColor: StoreColors.white, borderRadius: StoreRadii.medium, borderCurve: 'continuous', borderWidth: 2, borderColor: StoreColors.ink, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 13, gap: 9 },
+  searchInput: { flex: 1, color: StoreColors.ink, fontSize: 15 },
+  hero: { backgroundColor: StoreColors.mintSoft, borderWidth: 3, borderColor: StoreColors.ink, borderRadius: StoreRadii.large, borderCurve: 'continuous', overflow: 'hidden', boxShadow: `5px 5px 0 ${StoreColors.ink}` },
+  desktopHero: { minHeight: 320, flexDirection: 'row', alignItems: 'stretch' },
+  mobileHero: { minHeight: 205, flexDirection: 'row' },
+  heroCopy: { flex: 0.9, padding: 24, justifyContent: 'center', alignItems: 'flex-start', gap: 11, zIndex: 2 },
+  heroTitle: { color: StoreColors.jungleDark, fontSize: 50, lineHeight: 52, fontWeight: '900', letterSpacing: -2 },
+  mobileHeroTitle: { fontSize: 34, lineHeight: 35 },
+  heroDescription: { color: StoreColors.ink, fontSize: 16, fontWeight: '600' },
+  artPlaceholder: { flex: 1.4, minWidth: 130, justifyContent: 'center', alignItems: 'center', borderLeftWidth: 2, borderLeftColor: '#C2D8C3', borderStyle: 'dashed' },
+  artCircle: { width: 112, height: 112, maxWidth: '55%', aspectRatio: 1, borderRadius: StoreRadii.pill, borderWidth: 3, borderColor: '#B9CFBA', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' },
+  heroLeaf: { position: 'absolute', right: 14, bottom: 5, transform: [{ rotate: '-22deg' }] },
+  section: { gap: 13 },
+  sectionHeadingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  sectionTitle: { color: StoreColors.ink, fontSize: 23, fontWeight: '900', letterSpacing: -0.5 },
+  resultCount: { color: StoreColors.jungle, fontSize: 14, fontWeight: '700' },
+  categoryRow: { gap: 14, paddingRight: 14, paddingBottom: 6 },
+  categoryCard: { width: 205, height: 78, borderWidth: 2.5, borderColor: StoreColors.ink, borderRadius: StoreRadii.medium, borderCurve: 'continuous', boxShadow: `4px 4px 0 ${StoreColors.ink}`, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  categoryIcon: { width: 43, height: 43, borderRadius: StoreRadii.pill, borderWidth: 2, borderColor: StoreColors.ink, backgroundColor: StoreColors.white, alignItems: 'center', justifyContent: 'center' },
+  categoryText: { color: StoreColors.ink, fontSize: 17, fontWeight: '800' },
+  productGrid: { flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: -7 },
+  productSlot: { padding: 7 },
+  productCard: { flex: 1, minHeight: 100, backgroundColor: StoreColors.white, borderWidth: 2.5, borderColor: StoreColors.ink, borderRadius: StoreRadii.medium, borderCurve: 'continuous', boxShadow: `4px 4px 0 ${StoreColors.ink}`, padding: 10, gap: 10 },
+  editButton: { position: 'absolute', zIndex: 3, top: 16, right: 16, width: 38, height: 38, borderRadius: StoreRadii.pill, borderWidth: 2, borderColor: StoreColors.ink, backgroundColor: StoreColors.yellow, alignItems: 'center', justifyContent: 'center', boxShadow: `2px 2px 0 ${StoreColors.ink}` },
+  productImage: { width: '100%', aspectRatio: 1.15, backgroundColor: StoreColors.mintMuted, borderRadius: StoreRadii.small, borderCurve: 'continuous', borderWidth: 1.5, borderColor: StoreColors.ink },
+  productMeta: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 46 },
+  productName: { flex: 1, color: StoreColors.ink, fontSize: 16, fontWeight: '800' },
+  priceTag: { backgroundColor: StoreColors.orange, color: StoreColors.ink, borderWidth: 2, borderColor: StoreColors.ink, borderRadius: StoreRadii.pill, overflow: 'hidden', paddingHorizontal: 9, paddingVertical: 6, fontSize: 13, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  toyButton: { minHeight: 43, backgroundColor: StoreColors.electric, borderWidth: 2, borderColor: StoreColors.ink, borderRadius: StoreRadii.small, borderCurve: 'continuous', boxShadow: `3px 3px 0 ${StoreColors.ink}`, paddingHorizontal: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
+  compactButton: { alignSelf: 'flex-start', minHeight: 42, paddingHorizontal: 17 },
+  toyButtonPressed: { transform: [{ translateX: 3 }, { translateY: 3 }], boxShadow: 'none' },
+  toyButtonText: { color: StoreColors.ink, fontSize: 14, fontWeight: '900' },
+  pressed: { opacity: 0.88, transform: [{ translateX: 2 }, { translateY: 2 }] },
+  messageBox: { minHeight: 220, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  messageText: { color: StoreColors.jungle, fontSize: 16, fontWeight: '700' },
+  errorBox: { minHeight: 220, backgroundColor: '#FFF4F1', borderWidth: 2, borderColor: StoreColors.ink, borderRadius: StoreRadii.medium, borderCurve: 'continuous', alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
+  errorText: { color: StoreColors.danger, fontSize: 15, fontWeight: '700', textAlign: 'center' },
 });
