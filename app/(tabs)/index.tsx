@@ -1,9 +1,11 @@
 import { Ionicons } from '@expo/vector-icons';
 import { Image } from 'expo-image';
 import { Link, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -16,21 +18,27 @@ import {
 
 import { StoreColors, StoreRadii } from '@/constants/store-theme';
 import { API_BASE_URL } from '@/constants/api';
+import { useAuth } from '@/components/auth-provider';
+import { useCart } from '@/components/cart-provider';
+import { matchesProductSearch } from '@/utils/product-search';
 
 const PRODUCTS_URL = `${API_BASE_URL}/api/products`;
 
 type Product = {
   id: string | number;
   product_name: string;
+  description?: string | null;
   price: string | number;
   image_url: string;
+  sku?: string;
+  category?: string | null;
 };
 
 const categories = [
-  { name: 'Jungle', icon: 'leaf' as const, color: StoreColors.electric },
-  { name: 'Space', icon: 'rocket' as const, color: StoreColors.lavender },
-  { name: 'Robot', icon: 'hardware-chip' as const, color: StoreColors.peach },
-  { name: 'อื่นๆ', icon: 'star' as const, color: '#FFF3A8' },
+  { name: 'Jungle', value: 'Jungle', icon: 'leaf' as const, color: StoreColors.electric },
+  { name: 'Space', value: 'Space', icon: 'rocket' as const, color: StoreColors.lavender },
+  { name: 'Robot', value: 'Robot', icon: 'hardware-chip' as const, color: StoreColors.peach },
+  { name: 'อื่นๆ', value: 'Other', icon: 'star' as const, color: '#FFF3A8' },
 ];
 
 function formatPrice(price: Product['price']) {
@@ -76,11 +84,7 @@ export default function HomeScreen() {
   }, [loadProducts]);
 
   const visibleProducts = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase('th');
-    if (!query) return products;
-    return products.filter((product) =>
-      product.product_name.toLocaleLowerCase('th').includes(query),
-    );
+    return products.filter((product) => matchesProductSearch(product, search));
   }, [products, search]);
 
   return (
@@ -101,35 +105,14 @@ export default function HomeScreen() {
           <Hero isDesktop={isDesktop} />
 
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>หมวดหมู่</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.categoryRow}>
-              {categories.map((category) => (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`หมวด ${category.name}`}
-                  key={category.name}
-                  style={({ pressed }) => [
-                    styles.categoryCard,
-                    { backgroundColor: category.color },
-                    pressed && styles.pressed,
-                  ]}>
-                  <View style={styles.categoryIcon}>
-                    <Ionicons name={category.icon} size={23} color={StoreColors.ink} />
-                  </View>
-                  <Text style={styles.categoryText}>{category.name}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
+            <CategoryCarousel />
           </View>
 
           <View style={styles.section}>
             <View style={styles.sectionHeadingRow}>
               <Text style={styles.sectionTitle}>สินค้าแนะนำ</Text>
               {!!search && (
-                <Text style={styles.resultCount}>{visibleProducts.length} รายการ</Text>
+                <Text accessibilityLiveRegion="polite" style={styles.resultCount}>{visibleProducts.length} รายการ</Text>
               )}
             </View>
 
@@ -163,6 +146,96 @@ export default function HomeScreen() {
   );
 }
 
+function CategoryCarousel() {
+  const router = useRouter();
+  const scrollRef = useRef<ScrollView>(null);
+  const [scrollX, setScrollX] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
+  const [contentWidth, setContentWidth] = useState(0);
+  const maxScrollX = Math.max(0, contentWidth - viewportWidth);
+  const canScrollLeft = scrollX > 4;
+  const canScrollRight = scrollX < maxScrollX - 4;
+
+  const moveCategories = (direction: -1 | 1) => {
+    const step = Math.max(220, Math.min(viewportWidth * 0.75, 660));
+    const nextX = Math.max(0, Math.min(maxScrollX, scrollX + direction * step));
+    scrollRef.current?.scrollTo({ x: nextX, animated: true });
+  };
+
+  const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    setScrollX(event.nativeEvent.contentOffset.x);
+  };
+
+  return (
+    <View style={styles.categorySection}>
+      <View style={styles.categoryHeadingRow}>
+        <View style={styles.categoryHeadingCopy}>
+          <Text style={styles.sectionTitle}>หมวดหมู่</Text>
+          <Text style={styles.categoryHint}>ปัดแถบบนมือถือ หรือใช้ปุ่มลูกศร</Text>
+        </View>
+        <View style={styles.categoryControls}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="เลื่อนหมวดหมู่ไปทางซ้าย"
+            disabled={!canScrollLeft}
+            onPress={() => moveCategories(-1)}
+            style={({ pressed }) => [
+              styles.categoryArrow,
+              !canScrollLeft && styles.categoryArrowDisabled,
+              pressed && canScrollLeft && styles.pressed,
+            ]}>
+            <Ionicons name="chevron-back" size={22} color={StoreColors.ink} />
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="เลื่อนหมวดหมู่ไปทางขวา"
+            disabled={!canScrollRight}
+            onPress={() => moveCategories(1)}
+            style={({ pressed }) => [
+              styles.categoryArrow,
+              !canScrollRight && styles.categoryArrowDisabled,
+              pressed && canScrollRight && styles.pressed,
+            ]}>
+            <Ionicons name="chevron-forward" size={22} color={StoreColors.ink} />
+          </Pressable>
+        </View>
+      </View>
+
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        nestedScrollEnabled
+        directionalLockEnabled
+        bounces={false}
+        decelerationRate="fast"
+        scrollEventThrottle={16}
+        showsHorizontalScrollIndicator
+        onScroll={handleScroll}
+        onLayout={(event) => setViewportWidth(event.nativeEvent.layout.width)}
+        onContentSizeChange={(width) => setContentWidth(width)}
+        contentContainerStyle={styles.categoryRow}>
+        {categories.map((category) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`หมวด ${category.name}`}
+            onPress={() => router.push({ pathname: '/categories', params: { category: category.value } })}
+            key={category.name}
+            style={({ pressed }) => [
+              styles.categoryCard,
+              { backgroundColor: category.color },
+              pressed && styles.pressed,
+            ]}>
+            <View style={styles.categoryIcon}>
+              <Ionicons name={category.icon} size={23} color={StoreColors.ink} />
+            </View>
+            <Text style={styles.categoryText}>{category.name}</Text>
+          </Pressable>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}
+
 function StoreHeader({
   isDesktop,
   search,
@@ -172,10 +245,10 @@ function StoreHeader({
   search: string;
   onSearchChange: (value: string) => void;
 }) {
+  const { role } = useAuth();
   return (
     <View style={styles.header}>
       <View style={[styles.headerInner, isDesktop && styles.desktopHeaderInner]}>
-        {!isDesktop && <Ionicons name="menu" size={28} color={StoreColors.white} />}
         <Text style={styles.brand}>PAN &amp; TOYS</Text>
         {isDesktop && (
           <View style={styles.desktopNav}>
@@ -187,14 +260,24 @@ function StoreHeader({
         )}
         {isDesktop && <SearchBox search={search} onSearchChange={onSearchChange} />}
         <View style={styles.headerActions}>
-          <Link href={'/admin' as never} asChild>
-            <Pressable accessibilityLabel="จัดการสินค้า" style={styles.adminHeaderButton}>
-              <Ionicons name="settings-outline" size={22} color={StoreColors.white} />
-              {isDesktop && <Text style={styles.adminHeaderText}>จัดการสินค้า</Text>}
+          {role === 'admin' && (
+            <Link href="/admin" asChild>
+              <Pressable accessibilityLabel="จัดการสินค้า" style={styles.adminHeaderButton}>
+                <Ionicons name="pencil-outline" size={22} color={StoreColors.white} />
+                {isDesktop && <Text style={styles.adminHeaderText}>จัดการสินค้า</Text>}
+              </Pressable>
+            </Link>
+          )}
+          <Link href="/cart" asChild>
+            <Pressable accessibilityLabel="เปิดตะกร้าสินค้า">
+              <Ionicons name="cart-outline" size={27} color={StoreColors.white} />
             </Pressable>
           </Link>
-          <Ionicons name="cart-outline" size={27} color={StoreColors.white} />
-          <Ionicons name="person-circle-outline" size={28} color={StoreColors.white} />
+          <Link href="/profile" asChild>
+            <Pressable accessibilityLabel="เปิดโปรไฟล์">
+              <Ionicons name="person-circle-outline" size={28} color={StoreColors.white} />
+            </Pressable>
+          </Link>
         </View>
       </View>
       {!isDesktop && (
@@ -217,6 +300,9 @@ function SearchBox({ search, onSearchChange }: { search: string; onSearchChange:
         placeholder="ค้นหาของเล่น..."
         placeholderTextColor="#697871"
         style={styles.searchInput}
+        autoCapitalize="none"
+        autoCorrect={false}
+        clearButtonMode="while-editing"
         returnKeyType="search"
       />
       {!!search && (
@@ -229,12 +315,13 @@ function SearchBox({ search, onSearchChange }: { search: string; onSearchChange:
 }
 
 function Hero({ isDesktop }: { isDesktop: boolean }) {
+  const router = useRouter();
   return (
     <View style={[styles.hero, isDesktop ? styles.desktopHero : styles.mobileHero]}>
       <View style={styles.heroCopy}>
         <Text style={[styles.heroTitle, !isDesktop && styles.mobileHeroTitle]}>Monkey{`\n`}Jungle</Text>
         <Text style={styles.heroDescription}>ผจญภัยในโลกของเล่นกลางป่า</Text>
-        <ToyButton label="ดูสินค้าใหม่" onPress={() => {}} compact />
+        <ToyButton label="ดูสินค้าทั้งหมด" onPress={() => router.push('/categories')} compact />
       </View>
       <View style={styles.artPlaceholder}>
         <View style={styles.artCircle}>
@@ -249,12 +336,25 @@ function Hero({ isDesktop }: { isDesktop: boolean }) {
 function ProductCard({ product, columns }: { product: Product; columns: number }) {
   const width = `${100 / columns}%` as `${number}%`;
   const router = useRouter();
+  const { addItem } = useCart();
+  const { role } = useAuth();
+  const [wasAdded, setWasAdded] = useState(false);
+
+  const handleAddToCart = () => {
+    if (!role) {
+      router.push({ pathname: '/login', params: { mode: 'user' } } as never);
+      return;
+    }
+    addItem(product);
+    setWasAdded(true);
+    setTimeout(() => setWasAdded(false), 1200);
+  };
   return (
     <View style={[styles.productSlot, { width }]}>
       <Pressable
         onPress={() => router.push({ pathname: '/product/[id]', params: { id: String(product.id) } })}
         style={({ pressed }) => [styles.productCard, pressed && styles.pressed]}>
-          <Pressable
+          {role === 'admin' && <Pressable
             accessibilityLabel={`แก้ไข ${product.product_name}`}
             onPress={(event) => {
               event.stopPropagation();
@@ -262,7 +362,7 @@ function ProductCard({ product, columns }: { product: Product; columns: number }
             }}
             style={({ pressed }) => [styles.editButton, pressed && styles.pressed]}>
             <Ionicons name="pencil" size={17} color={StoreColors.ink} />
-          </Pressable>
+          </Pressable>}
           <Image
             source={{ uri: product.image_url }}
             style={styles.productImage}
@@ -273,7 +373,11 @@ function ProductCard({ product, columns }: { product: Product; columns: number }
             <Text numberOfLines={2} style={styles.productName}>{product.product_name}</Text>
             <Text style={styles.priceTag}>{formatPrice(product.price)}</Text>
           </View>
-          <ToyButton label="เพิ่มลงตะกร้า" icon="cart-outline" onPress={() => {}} />
+          <ToyButton
+            label={wasAdded ? 'เพิ่มแล้ว' : 'เพิ่มลงตะกร้า'}
+            icon={wasAdded ? 'checkmark' : 'cart-outline'}
+            onPress={handleAddToCart}
+          />
       </Pressable>
     </View>
   );
@@ -293,7 +397,10 @@ function ToyButton({
   return (
     <Pressable
       accessibilityRole="button"
-      onPress={onPress}
+      onPress={(event) => {
+        event.stopPropagation();
+        onPress();
+      }}
       style={({ pressed }) => [
         styles.toyButton,
         compact && styles.compactButton,
@@ -311,8 +418,8 @@ const styles = StyleSheet.create({
   content: { width: '100%', padding: 14, gap: 22 },
   desktopContent: { maxWidth: 1240, alignSelf: 'center', paddingHorizontal: 28, paddingVertical: 22, gap: 26 },
   header: { backgroundColor: StoreColors.jungleDark, borderBottomWidth: 3, borderBottomColor: StoreColors.ink },
-  headerInner: { minHeight: 64, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 18 },
-  desktopHeaderInner: { width: '100%', maxWidth: 1240, alignSelf: 'center', minHeight: 82, paddingHorizontal: 28 },
+  headerInner: { minHeight: 64, paddingLeft: 70, paddingRight: 16, flexDirection: 'row', alignItems: 'center', gap: 18 },
+  desktopHeaderInner: { width: '100%', maxWidth: 1240, alignSelf: 'center', minHeight: 82, paddingLeft: 78, paddingRight: 28 },
   brand: { color: StoreColors.white, fontSize: 25, fontWeight: '900', letterSpacing: -1 },
   desktopNav: { flexDirection: 'row', alignItems: 'center', gap: 24, marginLeft: 20 },
   navText: { color: StoreColors.white, fontWeight: '700', fontSize: 15 },
@@ -334,10 +441,17 @@ const styles = StyleSheet.create({
   artCircle: { width: 112, height: 112, maxWidth: '55%', aspectRatio: 1, borderRadius: StoreRadii.pill, borderWidth: 3, borderColor: '#B9CFBA', borderStyle: 'dashed', alignItems: 'center', justifyContent: 'center' },
   heroLeaf: { position: 'absolute', right: 14, bottom: 5, transform: [{ rotate: '-22deg' }] },
   section: { gap: 13 },
+  categorySection: { gap: 11 },
+  categoryHeadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 14 },
+  categoryHeadingCopy: { flex: 1, gap: 2 },
+  categoryHint: { color: '#5D6F61', fontSize: 12, fontWeight: '600' },
+  categoryControls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  categoryArrow: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.electric, borderWidth: 2, borderColor: StoreColors.ink, borderRadius: StoreRadii.pill, boxShadow: `2px 2px 0 ${StoreColors.ink}` },
+  categoryArrowDisabled: { opacity: 0.3, boxShadow: 'none' },
   sectionHeadingRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   sectionTitle: { color: StoreColors.ink, fontSize: 23, fontWeight: '900', letterSpacing: -0.5 },
   resultCount: { color: StoreColors.jungle, fontSize: 14, fontWeight: '700' },
-  categoryRow: { gap: 14, paddingRight: 14, paddingBottom: 6 },
+  categoryRow: { gap: 14, paddingHorizontal: 2, paddingBottom: 14 },
   categoryCard: { width: 205, height: 78, borderWidth: 2.5, borderColor: StoreColors.ink, borderRadius: StoreRadii.medium, borderCurve: 'continuous', boxShadow: `4px 4px 0 ${StoreColors.ink}`, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 },
   categoryIcon: { width: 43, height: 43, borderRadius: StoreRadii.pill, borderWidth: 2, borderColor: StoreColors.ink, backgroundColor: StoreColors.white, alignItems: 'center', justifyContent: 'center' },
   categoryText: { color: StoreColors.ink, fontSize: 17, fontWeight: '800' },

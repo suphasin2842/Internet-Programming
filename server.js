@@ -10,6 +10,7 @@ const app = express();
 const port = Number(process.env.PORT) || 3045;
 const scryptAsync = promisify(crypto.scrypt);
 const sessionLifetimeMs = 2 * 60 * 60 * 1000;
+const userSessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const loginAttempts = new Map();
 
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
@@ -57,15 +58,44 @@ async function verifyPassword(password, encodedHash) {
   return storedBuffer.length === derivedKey.length && crypto.timingSafeEqual(storedBuffer, derivedKey);
 }
 
-function checkLoginRateLimit(ip) {
+async function hashPassword(password) {
+  const N = 131072;
+  const r = 8;
+  const p = 1;
+  const salt = crypto.randomBytes(16).toString('hex');
+  const key = await scryptAsync(password, salt, 64, {
+    N,
+    r,
+    p,
+    maxmem: 256 * 1024 * 1024,
+  });
+  return `scrypt$${N}$${r}$${p}$${salt}$${key.toString('hex')}`;
+}
+
+function getLoginRateKey(mode, ip, identifier) {
+  const normalizedIdentifier = String(identifier || '').trim().toLowerCase() || 'unknown';
+  return `${mode}:${ip}:${normalizedIdentifier}`;
+}
+
+function isLoginRateLimited(key) {
   const now = Date.now();
-  const current = loginAttempts.get(ip);
+  const current = loginAttempts.get(key);
+  if (!current) return false;
+  if (now > current.resetAt) {
+    loginAttempts.delete(key);
+    return false;
+  }
+  return current.count >= 5;
+}
+
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const current = loginAttempts.get(key);
   if (!current || now > current.resetAt) {
-    loginAttempts.set(ip, { count: 1, resetAt: now + 15 * 60 * 1000 });
-    return true;
+    loginAttempts.set(key, { count: 1, resetAt: now + 15 * 60 * 1000 });
+    return;
   }
   current.count += 1;
-  return current.count <= 5;
 }
 
 async function requireAdmin(req, res, next) {
@@ -90,6 +120,196 @@ async function requireAdmin(req, res, next) {
     console.error('Admin session error:', error.message);
     return res.status(500).json({ error: 'ตรวจสอบสิทธิ์ Admin ไม่สำเร็จ' });
   }
+}
+
+function getBearerToken(req) {
+  const authorization = req.get('authorization') || '';
+  return authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
+}
+
+function publicUser(row) {
+  return {
+    id: row.id,
+    username: row.username,
+    name: row.display_name || row.username,
+    email: row.email,
+    phone: row.phone,
+    role: 'user',
+  };
+}
+
+async function requireUser(req, res, next) {
+  const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT s.id AS session_id, u.id, u.username, u.display_name, u.email, u.phone
+       FROM user_sessions AS s
+       JOIN user_accounts AS u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.is_active = 1
+       LIMIT 1`,
+      [hashSessionToken(token)],
+    );
+    if (rows.length === 0) return res.status(401).json({ error: 'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่' });
+    req.user = rows[0];
+    return next();
+  } catch (error) {
+    console.error('User session error:', error.message);
+    return res.status(500).json({ error: 'ตรวจสอบสิทธิ์ผู้ใช้ไม่สำเร็จ' });
+  }
+}
+
+async function requireOrderActor(req, res, next) {
+  const token = getBearerToken(req);
+  if (!token) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
+
+  try {
+    const tokenHash = hashSessionToken(token);
+    const [users] = await pool.execute(
+      `SELECT s.id AS session_id, u.id, u.username, u.display_name, u.email, u.phone
+       FROM user_sessions AS s
+       JOIN user_accounts AS u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.is_active = 1
+       LIMIT 1`,
+      [tokenHash],
+    );
+    if (users.length > 0) {
+      req.orderActor = { role: 'user', id: users[0].id };
+      req.user = users[0];
+      return next();
+    }
+
+    const [admins] = await pool.execute(
+      `SELECT s.id AS session_id, u.id, u.username
+       FROM admin_sessions AS s
+       JOIN admin_users AS u ON u.id = s.admin_user_id
+       WHERE s.token_hash = ? AND s.expires_at > NOW() AND u.is_active = 1
+       LIMIT 1`,
+      [tokenHash],
+    );
+    if (admins.length > 0) {
+      req.orderActor = { role: 'admin', id: admins[0].id };
+      req.admin = admins[0];
+      return next();
+    }
+
+    return res.status(401).json({ error: 'Session หมดอายุ กรุณาเข้าสู่ระบบใหม่' });
+  } catch (error) {
+    console.error('Order actor session error:', error.message);
+    return res.status(500).json({ error: 'ตรวจสอบสิทธิ์ผู้สั่งซื้อไม่สำเร็จ' });
+  }
+}
+
+function validateUserRegistration(body) {
+  const username = String(body.username || body.name || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const phone = String(body.phone || '').trim();
+  const password = String(body.password || '');
+  if (username.length < 2 || username.length > 80) return { error: 'ชื่อผู้ใช้ต้องมี 2-80 ตัวอักษร' };
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 190) return { error: 'Email ไม่ถูกต้อง' };
+  if (!/^0\d{9}$/.test(phone)) return { error: 'เบอร์โทรศัพท์ต้องเป็นตัวเลข 10 หลักและขึ้นต้นด้วย 0' };
+  if (password.length < 8 || password.length > 256 || !/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+    return { error: 'รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร และมีทั้งตัวอักษรกับตัวเลข' };
+  }
+  return { user: { username, display_name: username, email, phone, password } };
+}
+
+async function ensureTableColumn(tableName, columnName, definition) {
+  const [columns] = await pool.query(`SHOW COLUMNS FROM \`${tableName}\` LIKE ?`, [columnName]);
+  if (columns.length === 0) {
+    await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${columnName}\` ${definition}`);
+  }
+}
+
+async function ensureAuthTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_users (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      username VARCHAR(80) NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_login_at TIMESTAMP NULL DEFAULT NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_admin_users_username (username)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_accounts (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      username VARCHAR(80) NOT NULL,
+      display_name VARCHAR(80) NOT NULL,
+      email VARCHAR(190) NOT NULL,
+      phone VARCHAR(30) NOT NULL,
+      password_hash VARCHAR(255) NOT NULL,
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      last_login_at TIMESTAMP NULL DEFAULT NULL,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_user_accounts_username (username),
+      UNIQUE KEY uq_user_accounts_email (email),
+      UNIQUE KEY uq_user_accounts_phone (phone)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS admin_sessions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      admin_user_id BIGINT UNSIGNED NOT NULL,
+      token_hash CHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_admin_sessions_token_hash (token_hash),
+      KEY idx_admin_sessions_expiry (expires_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_sessions (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id BIGINT UNSIGNED NOT NULL,
+      token_hash CHAR(64) NOT NULL,
+      expires_at DATETIME NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uq_user_sessions_token_hash (token_hash),
+      KEY idx_user_sessions_user_id (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id BIGINT UNSIGNED NULL,
+      admin_user_id BIGINT UNSIGNED NULL,
+      buyer_role VARCHAR(16) NOT NULL DEFAULT 'user',
+      status VARCHAR(24) NOT NULL DEFAULT 'pending',
+      total_amount DECIMAL(12,2) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      KEY idx_orders_user_id (user_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+  await ensureTableColumn('orders', 'admin_user_id', 'BIGINT UNSIGNED NULL AFTER user_id');
+  await ensureTableColumn('orders', 'buyer_role', "VARCHAR(16) NOT NULL DEFAULT 'user' AFTER admin_user_id");
+  const [orderUserColumns] = await pool.query('SHOW COLUMNS FROM orders LIKE ?', ['user_id']);
+  if (orderUserColumns.length > 0 && orderUserColumns[0].Null === 'NO') {
+    await pool.query('ALTER TABLE orders MODIFY COLUMN user_id BIGINT UNSIGNED NULL');
+  }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS order_items (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      order_id BIGINT UNSIGNED NOT NULL,
+      product_id BIGINT UNSIGNED NULL,
+      product_name VARCHAR(150) NOT NULL,
+      unit_price DECIMAL(12,2) NOT NULL,
+      quantity INT UNSIGNED NOT NULL,
+      PRIMARY KEY (id),
+      KEY idx_order_items_order_id (order_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
 }
 
 function parseProduct(body) {
@@ -152,15 +372,232 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+app.post('/api/auth/register', async (req, res) => {
+  const parsed = validateUserRegistration(req.body || {});
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+  try {
+    const passwordHash = await hashPassword(parsed.user.password);
+    const [result] = await pool.execute(
+      `INSERT INTO user_accounts (username, display_name, email, phone, password_hash)
+       VALUES (?, ?, ?, ?, ?)`,
+      [parsed.user.username, parsed.user.display_name, parsed.user.email, parsed.user.phone, passwordHash],
+    );
+    const [rows] = await pool.execute(
+      'SELECT id, username, display_name, email, phone FROM user_accounts WHERE id = ? LIMIT 1',
+      [result.insertId],
+    );
+    return res.status(201).json({ user: publicUser(rows[0]) });
+  } catch (error) {
+    console.error('User registration error:', error.message);
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ error: 'ชื่อผู้ใช้, Email หรือเบอร์โทรศัพท์นี้ถูกใช้แล้ว' });
+    return res.status(500).json({ error: 'สมัครสมาชิกไม่สำเร็จ' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const identifier = String(req.body.identifier || '').trim();
+  const password = String(req.body.password || '');
+  if (!identifier || !password || password.length > 256) return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้หรือ Email และรหัสผ่าน' });
+  const rateKey = getLoginRateKey('user', ip, identifier);
+  if (isLoginRateLimited(rateKey)) return res.status(429).json({ error: 'ลองเข้าสู่ระบบบัญชีนี้มากเกินไป กรุณารอ 15 นาที' });
+
+  try {
+    const [users] = await pool.execute(
+      `SELECT id, username, display_name, email, phone, password_hash
+       FROM user_accounts
+       WHERE (username = ? OR email = ?) AND is_active = 1
+       LIMIT 1`,
+      [identifier, identifier.toLowerCase()],
+    );
+    const isValid = users.length === 1 && await verifyPassword(password, users[0].password_hash);
+    if (!isValid) {
+      recordLoginFailure(rateKey);
+      return res.status(401).json({ error: 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง' });
+    }
+
+    const token = crypto.randomBytes(32).toString('base64url');
+    const expiresAt = new Date(Date.now() + userSessionLifetimeMs);
+    await pool.execute(
+      'INSERT INTO user_sessions (user_id, token_hash, expires_at) VALUES (?, ?, ?)',
+      [users[0].id, hashSessionToken(token), expiresAt],
+    );
+    await pool.execute('UPDATE user_accounts SET last_login_at = NOW() WHERE id = ?', [users[0].id]);
+    loginAttempts.delete(rateKey);
+    return res.json({ token, expiresAt: expiresAt.toISOString(), user: publicUser(users[0]) });
+  } catch (error) {
+    console.error('User login error:', error.message);
+    return res.status(500).json({ error: 'เข้าสู่ระบบไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/auth/me', requireUser, async (req, res) => {
+  return res.json({ user: publicUser(req.user) });
+});
+
+app.post('/api/auth/logout', requireUser, async (req, res) => {
+  try {
+    await pool.execute('DELETE FROM user_sessions WHERE token_hash = ?', [hashSessionToken(getBearerToken(req))]);
+    return res.status(204).send();
+  } catch (error) {
+    console.error('User logout error:', error.message);
+    return res.status(500).json({ error: 'ออกจากระบบไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/me', requireAdmin, async (req, res) => {
+  return res.json({ admin: { username: req.admin.username, role: 'admin' } });
+});
+
+function parseOrderItems(body) {
+  if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > 50) {
+    return { error: 'ตะกร้าสินค้าไม่ถูกต้อง' };
+  }
+  const quantities = new Map();
+  for (const item of body.items) {
+    const productId = Number(item.productId ?? item.id);
+    const quantity = Number(item.quantity);
+    if (!Number.isInteger(productId) || productId < 1 || !Number.isInteger(quantity) || quantity < 1 || quantity > 99) {
+      return { error: 'รายการสินค้าในตะกร้าไม่ถูกต้อง' };
+    }
+    const nextQuantity = (quantities.get(productId) || 0) + quantity;
+    if (nextQuantity > 99) return { error: 'จำนวนสินค้าต่อรายการต้องไม่เกิน 99 ชิ้น' };
+    quantities.set(productId, nextQuantity);
+  }
+  return { quantities };
+}
+
+app.post('/api/orders', requireOrderActor, async (req, res) => {
+  const parsed = parseOrderItems(req.body || {});
+  if (parsed.error) return res.status(400).json({ error: parsed.error });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const productIds = [...parsed.quantities.keys()];
+    const placeholders = productIds.map(() => '?').join(',');
+    const [products] = await connection.execute(
+      `SELECT id, product_name, price FROM Inventory WHERE id IN (${placeholders})`,
+      productIds,
+    );
+    if (products.length !== productIds.length) {
+      await connection.rollback();
+      return res.status(409).json({ error: 'มีสินค้าบางรายการไม่พร้อมจำหน่ายแล้ว กรุณาตรวจสอบตะกร้า' });
+    }
+
+    const orderLines = products.map((product) => ({
+      productId: Number(product.id),
+      productName: String(product.product_name),
+      unitPrice: Number(product.price),
+      quantity: parsed.quantities.get(Number(product.id)),
+    }));
+    const totalAmount = orderLines.reduce((sum, line) => sum + line.unitPrice * line.quantity, 0);
+    const isAdminOrder = req.orderActor.role === 'admin';
+    const [orderResult] = await connection.execute(
+      `INSERT INTO orders (user_id, admin_user_id, buyer_role, status, total_amount)
+       VALUES (?, ?, ?, ?, ?)`,
+      [isAdminOrder ? null : req.orderActor.id, isAdminOrder ? req.orderActor.id : null, req.orderActor.role, 'pending', totalAmount.toFixed(2)],
+    );
+    for (const line of orderLines) {
+      await connection.execute(
+        `INSERT INTO order_items (order_id, product_id, product_name, unit_price, quantity)
+         VALUES (?, ?, ?, ?, ?)`,
+        [orderResult.insertId, line.productId, line.productName, line.unitPrice.toFixed(2), line.quantity],
+      );
+    }
+    await connection.commit();
+    return res.status(201).json({
+      order: {
+        id: orderResult.insertId,
+        status: 'pending',
+        totalAmount,
+        items: orderLines,
+      },
+    });
+  } catch (error) {
+    await connection.rollback();
+    console.error('Create order error:', error.message);
+    return res.status(500).json({ error: 'สร้างคำสั่งซื้อไม่สำเร็จ' });
+  } finally {
+    connection.release();
+  }
+});
+
+app.get('/api/orders', requireOrderActor, async (req, res) => {
+  try {
+    const orderFilter = req.orderActor.role === 'admin'
+      ? 'buyer_role = \'admin\' AND admin_user_id = ?'
+      : 'buyer_role = \'user\' AND user_id = ?';
+    const [orders] = await pool.execute(
+      `SELECT id, status, total_amount AS totalAmount, created_at AS createdAt, updated_at AS updatedAt
+       FROM orders WHERE ${orderFilter} ORDER BY id DESC`,
+      [req.orderActor.id],
+    );
+    if (orders.length === 0) return res.json([]);
+    const orderIds = orders.map((order) => order.id);
+    const placeholders = orderIds.map(() => '?').join(',');
+    const [items] = await pool.execute(
+      `SELECT order_id AS orderId, product_id AS productId, product_name AS productName,
+              unit_price AS unitPrice, quantity
+       FROM order_items WHERE order_id IN (${placeholders}) ORDER BY id ASC`,
+      orderIds,
+    );
+    const itemsByOrder = new Map();
+    for (const item of items) {
+      const current = itemsByOrder.get(item.orderId) || [];
+      current.push(item);
+      itemsByOrder.set(item.orderId, current);
+    }
+    return res.json(orders.map((order) => ({ ...order, items: itemsByOrder.get(order.id) || [] })));
+  } catch (error) {
+    console.error('Orders error:', error.message);
+    return res.status(500).json({ error: 'โหลดประวัติคำสั่งซื้อไม่สำเร็จ' });
+  }
+});
+
+app.get('/api/admin/orders', requireAdmin, async (_req, res) => {
+  try {
+    const [orders] = await pool.query(
+      `SELECT o.id, o.status, o.buyer_role AS buyerRole, o.total_amount AS totalAmount, o.created_at AS createdAt,
+              COALESCE(u.username, a.username) AS username,
+              u.email, u.phone
+       FROM orders AS o
+       LEFT JOIN user_accounts AS u ON o.buyer_role = 'user' AND u.id = o.user_id
+       LEFT JOIN admin_users AS a ON o.buyer_role = 'admin' AND a.id = o.admin_user_id
+       ORDER BY o.id DESC`,
+    );
+    return res.json(orders);
+  } catch (error) {
+    console.error('Admin orders error:', error.message);
+    return res.status(500).json({ error: 'โหลดคำสั่งซื้อไม่สำเร็จ' });
+  }
+});
+
+app.put('/api/admin/orders/:id/status', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  const status = String(req.body.status || '').trim();
+  const allowedStatuses = new Set(['pending', 'confirmed', 'shipped', 'delivered', 'cancelled']);
+  if (!Number.isInteger(id) || id < 1 || !allowedStatuses.has(status)) return res.status(400).json({ error: 'สถานะคำสั่งซื้อไม่ถูกต้อง' });
+  try {
+    const [result] = await pool.execute('UPDATE orders SET status = ? WHERE id = ?', [status, id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบคำสั่งซื้อ' });
+    return res.json({ id, status });
+  } catch (error) {
+    console.error('Update order status error:', error.message);
+    return res.status(500).json({ error: 'อัปเดตสถานะคำสั่งซื้อไม่สำเร็จ' });
+  }
+});
+
 app.post('/api/admin/login', async (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
-  if (!checkLoginRateLimit(ip)) return res.status(429).json({ error: 'ลองเข้าสู่ระบบมากเกินไป กรุณารอ 15 นาที' });
-
   const username = String(req.body.username || '').trim();
   const password = String(req.body.password || '');
   if (!username || !password || password.length > 256) {
     return res.status(400).json({ error: 'กรุณากรอกชื่อผู้ใช้และรหัสผ่าน' });
   }
+  const rateKey = getLoginRateKey('admin', ip, username);
+  if (isLoginRateLimited(rateKey)) return res.status(429).json({ error: 'ลองเข้าสู่ระบบบัญชีนี้มากเกินไป กรุณารอ 15 นาที' });
 
   try {
     const [users] = await pool.execute(
@@ -168,7 +605,10 @@ app.post('/api/admin/login', async (req, res) => {
       [username],
     );
     const isValid = users.length === 1 && await verifyPassword(password, users[0].password_hash);
-    if (!isValid) return res.status(401).json({ error: 'ชื่อผู้ดูแลระบบหรือรหัสผ่านไม่ถูกต้อง' });
+    if (!isValid) {
+      recordLoginFailure(rateKey);
+      return res.status(401).json({ error: 'ชื่อผู้ดูแลระบบหรือรหัสผ่านไม่ถูกต้อง' });
+    }
 
     const token = crypto.randomBytes(32).toString('base64url');
     const expiresAt = new Date(Date.now() + sessionLifetimeMs);
@@ -177,7 +617,7 @@ app.post('/api/admin/login', async (req, res) => {
       [users[0].id, hashSessionToken(token), expiresAt],
     );
     await pool.execute('UPDATE admin_users SET last_login_at = NOW() WHERE id = ?', [users[0].id]);
-    loginAttempts.delete(ip);
+    loginAttempts.delete(rateKey);
     return res.json({ token, expiresAt: expiresAt.toISOString(), admin: { username: users[0].username } });
   } catch (error) {
     console.error('Admin login error:', error.message);
@@ -238,11 +678,35 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
   }
 });
 
+app.delete('/api/products/:id', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Product ID ไม่ถูกต้อง' });
+
+  try {
+    const [result] = await pool.execute('DELETE FROM Inventory WHERE id = ?', [id]);
+    if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบสินค้าที่ต้องการลบ' });
+    return res.json({ deleted: true, id });
+  } catch (error) {
+    console.error('Delete product error:', error.message);
+    if (error.code === 'ER_ROW_IS_REFERENCED_2') {
+      return res.status(409).json({ error: 'สินค้านี้ถูกใช้อ้างอิงอยู่ จึงยังไม่สามารถลบได้' });
+    }
+    return res.status(500).json({ error: 'ลบสินค้าไม่สำเร็จ' });
+  }
+});
+
 app.use((error, _req, res, _next) => {
   console.error('Unhandled request error:', error.message);
   res.status(500).json({ error: 'เกิดข้อผิดพลาดภายในระบบ' });
 });
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`API running on port ${port}`);
-});
+ensureAuthTables()
+  .then(() => {
+    app.listen(port, '0.0.0.0', () => {
+      console.log(`API running on port ${port}`);
+    });
+  })
+  .catch((error) => {
+    console.error('Auth/order table initialization failed:', error.message);
+    process.exitCode = 1;
+  });

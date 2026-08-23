@@ -19,8 +19,5 @@ CREATE TABLE IF NOT EXISTS `admin_sessions` (
   `created_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uq_admin_sessions_token_hash` (`token_hash`),
-  KEY `idx_admin_sessions_expiry` (`expires_at`),
-  CONSTRAINT `fk_admin_sessions_user`
-    FOREIGN KEY (`admin_user_id`) REFERENCES `admin_users` (`id`) ON DELETE CASCADE
+  KEY `idx_admin_sessions_expiry` (`expires_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
