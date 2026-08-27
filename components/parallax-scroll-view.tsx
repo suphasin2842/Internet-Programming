@@ -1,3 +1,4 @@
+// ScrollView ตัวอย่างแบบ Parallax จาก template (หน้า Store หลักไม่ได้พึ่งตัวนี้)
 import type { PropsWithChildren, ReactElement } from 'react';
 import { StyleSheet } from 'react-native';
 import Animated, {

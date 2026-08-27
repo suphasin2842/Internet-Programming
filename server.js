@@ -1,3 +1,4 @@
+// ไฟล์นี้คือ Backend หลักของร้าน: เปิด API, คุยกับ MySQL และเช็กสิทธิ์ Login
 require('dotenv').config();
 
 const crypto = require('crypto');
@@ -7,17 +8,20 @@ const express = require('express');
 const mysql = require('mysql2/promise');
 
 const app = express();
+// พอร์ตและอายุ Session แยกกัน: Admin สั้นกว่า User เพื่อความปลอดภัยกว่า
 const port = Number(process.env.PORT) || 3045;
 const scryptAsync = promisify(crypto.scrypt);
 const sessionLifetimeMs = 2 * 60 * 60 * 1000;
 const userSessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const loginAttempts = new Map();
 
+// อ่านเว็บที่อนุญาตให้เรียก API จาก .env (CORS)
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+// เปิดรับ Request จาก Frontend และรับ JSON ได้ไม่เกิน 100 KB ต่อครั้ง
 app.use(cors({
   origin(origin, callback) {
     if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
@@ -29,6 +33,7 @@ app.use(cors({
 app.use(express.json({ limit: '100kb' }));
 app.disable('x-powered-by');
 
+// สร้าง Connection Pool ไปยัง Database เพื่อไม่ต้องเปิดการเชื่อมต่อใหม่ทุก Request
 const pool = mysql.createPool({
   host: process.env.DB_HOST,
   user: process.env.DB_USER,
@@ -40,10 +45,12 @@ const pool = mysql.createPool({
   queueLimit: 0,
 });
 
+// เก็บ Token ใน DB เป็น SHA-256 แทนการเก็บ Token จริง
 function hashSessionToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+// เอารหัสที่ผู้ใช้กรอกมาเทียบกับ scrypt hash ที่เก็บไว้ โดยเทียบแบบปลอดภัย
 async function verifyPassword(password, encodedHash) {
   const [algorithm, nValue, rValue, pValue, salt, storedKey] = String(encodedHash).split('$');
   if (algorithm !== 'scrypt' || !salt || !storedKey) return false;
@@ -58,6 +65,7 @@ async function verifyPassword(password, encodedHash) {
   return storedBuffer.length === derivedKey.length && crypto.timingSafeEqual(storedBuffer, derivedKey);
 }
 
+// สร้าง hash ใหม่ตอนสมัคร User หรือสร้าง Admin (ไม่มีการเก็บรหัสผ่านดิบ)
 async function hashPassword(password) {
   const N = 131072;
   const r = 8;
@@ -72,11 +80,13 @@ async function hashPassword(password) {
   return `scrypt$${N}$${r}$${p}$${salt}$${key.toString('hex')}`;
 }
 
+// สร้างกุญแจแยกตามประเภทบัญชี, IP และชื่อที่ Login เพื่อกันการลองรหัสถี่เกินไป
 function getLoginRateKey(mode, ip, identifier) {
   const normalizedIdentifier = String(identifier || '').trim().toLowerCase() || 'unknown';
   return `${mode}:${ip}:${normalizedIdentifier}`;
 }
 
+// ถ้าผิดเกิน 5 ครั้งใน 15 นาที จะพักการ Login ของบัญชีนั้นชั่วคราว
 function isLoginRateLimited(key) {
   const now = Date.now();
   const current = loginAttempts.get(key);
@@ -98,6 +108,7 @@ function recordLoginFailure(key) {
   current.count += 1;
 }
 
+// Middleware นี้ใช้ครอบ Route ที่ให้เฉพาะ Admin เข้าได้
 async function requireAdmin(req, res, next) {
   const authorization = req.get('authorization') || '';
   const token = authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
@@ -122,11 +133,13 @@ async function requireAdmin(req, res, next) {
   }
 }
 
+// ดึง Token จาก Header: Authorization: Bearer <token>
 function getBearerToken(req) {
   const authorization = req.get('authorization') || '';
   return authorization.startsWith('Bearer ') ? authorization.slice(7) : '';
 }
 
+// ตัด password_hash และข้อมูลภายในออกก่อนส่งข้อมูล User กลับไปที่ Frontend
 function publicUser(row) {
   return {
     id: row.id,
@@ -138,6 +151,7 @@ function publicUser(row) {
   };
 }
 
+// Middleware ตรวจ Session ของ User ปกติ
 async function requireUser(req, res, next) {
   const token = getBearerToken(req);
   if (!token) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -160,6 +174,7 @@ async function requireUser(req, res, next) {
   }
 }
 
+// Order รองรับทั้ง User และ Admin: ลองตรวจ Session User ก่อน แล้วค่อยตรวจ Admin
 async function requireOrderActor(req, res, next) {
   const token = getBearerToken(req);
   if (!token) return res.status(401).json({ error: 'กรุณาเข้าสู่ระบบก่อนดำเนินการ' });
@@ -201,6 +216,7 @@ async function requireOrderActor(req, res, next) {
   }
 }
 
+// ตรวจข้อมูลสมัคร User ให้ตรงกับกฎเดียวกับหน้า Login
 function validateUserRegistration(body) {
   const username = String(body.username || body.name || '').trim();
   const email = String(body.email || '').trim().toLowerCase();
@@ -215,6 +231,7 @@ function validateUserRegistration(body) {
   return { user: { username, display_name: username, email, phone, password } };
 }
 
+// เติม Column ที่อาจยังไม่มีในตารางเก่า โดยไม่ลบข้อมูลเดิม
 async function ensureTableColumn(tableName, columnName, definition) {
   const [columns] = await pool.query(`SHOW COLUMNS FROM \`${tableName}\` LIKE ?`, [columnName]);
   if (columns.length === 0) {
@@ -222,6 +239,7 @@ async function ensureTableColumn(tableName, columnName, definition) {
   }
 }
 
+// สร้างตาราง Auth/Order ถ้ายังไม่มี และปรับ orders ให้รองรับ Admin buyer
 async function ensureAuthTables() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS admin_users (
@@ -312,6 +330,7 @@ async function ensureAuthTables() {
   `);
 }
 
+// แปลงและตรวจข้อมูลสินค้าก่อน INSERT/UPDATE ทุกครั้ง
 function parseProduct(body) {
   const product = {
     product_name: String(body.product_name || '').trim(),
@@ -338,6 +357,7 @@ function parseProduct(body) {
   return { product };
 }
 
+// เช็กว่า Backend ยังต่อ Database ได้หรือไม่
 app.get('/api/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -348,6 +368,7 @@ app.get('/api/health', async (_req, res) => {
   }
 });
 
+// หน้าร้านใช้ดึงสินค้าทั้งหมดจาก Inventory
 app.get('/api/products', async (_req, res) => {
   try {
     const [rows] = await pool.query('SELECT * FROM Inventory ORDER BY id DESC');
@@ -358,6 +379,7 @@ app.get('/api/products', async (_req, res) => {
   }
 });
 
+// หน้ารายละเอียดสินค้าใช้ดึงสินค้าทีละ ID
 app.get('/api/products/:id', async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Product ID ไม่ถูกต้อง' });
@@ -372,6 +394,7 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+// สมัคร User: ตรวจข้อมูล -> hash password -> INSERT -> ส่งข้อมูลปลอดภัยกลับไป
 app.post('/api/auth/register', async (req, res) => {
   const parsed = validateUserRegistration(req.body || {});
   if (parsed.error) return res.status(400).json({ error: parsed.error });
@@ -395,6 +418,7 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
+// Login User: ค้นหาบัญชี, ตรวจ hash, สร้าง Session Token
 app.post('/api/auth/login', async (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const identifier = String(req.body.identifier || '').trim();
@@ -432,10 +456,12 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// ตรวจว่ารหัส Session User ที่เก็บไว้ยังใช้ได้หรือไม่
 app.get('/api/auth/me', requireUser, async (req, res) => {
   return res.json({ user: publicUser(req.user) });
 });
 
+// ลบ Session User ออกจาก Database
 app.post('/api/auth/logout', requireUser, async (req, res) => {
   try {
     await pool.execute('DELETE FROM user_sessions WHERE token_hash = ?', [hashSessionToken(getBearerToken(req))]);
@@ -446,10 +472,12 @@ app.post('/api/auth/logout', requireUser, async (req, res) => {
   }
 });
 
+// ตรวจ Session Admin ที่ Frontend เรียกตอนเปิดแอป/รีเฟรช
 app.get('/api/admin/me', requireAdmin, async (req, res) => {
   return res.json({ admin: { username: req.admin.username, role: 'admin' } });
 });
 
+// ตรวจรายการในตะกร้าก่อนสร้าง Order และรวมสินค้าซ้ำให้เหลือรายการเดียว
 function parseOrderItems(body) {
   if (!Array.isArray(body.items) || body.items.length === 0 || body.items.length > 50) {
     return { error: 'ตะกร้าสินค้าไม่ถูกต้อง' };
@@ -468,6 +496,7 @@ function parseOrderItems(body) {
   return { quantities };
 }
 
+// สร้าง Order จริงด้วย Transaction: ถ้าขั้นใดพังจะ Rollback ทั้งชุด
 app.post('/api/orders', requireOrderActor, async (req, res) => {
   const parsed = parseOrderItems(req.body || {});
   if (parsed.error) return res.status(400).json({ error: parsed.error });
@@ -524,6 +553,7 @@ app.post('/api/orders', requireOrderActor, async (req, res) => {
   }
 });
 
+// ดึงประวัติ Order เฉพาะของผู้ที่ Login อยู่ (User หรือ Admin)
 app.get('/api/orders', requireOrderActor, async (req, res) => {
   try {
     const orderFilter = req.orderActor.role === 'admin'
@@ -556,6 +586,7 @@ app.get('/api/orders', requireOrderActor, async (req, res) => {
   }
 });
 
+// Admin ดู Order ของทุกคนเพื่อใช้จัดการสถานะ
 app.get('/api/admin/orders', requireAdmin, async (_req, res) => {
   try {
     const [orders] = await pool.query(
@@ -574,6 +605,7 @@ app.get('/api/admin/orders', requireAdmin, async (_req, res) => {
   }
 });
 
+// Admin เปลี่ยนสถานะ Order จากหน้า Dashboard
 app.put('/api/admin/orders/:id/status', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   const status = String(req.body.status || '').trim();
@@ -589,6 +621,7 @@ app.put('/api/admin/orders/:id/status', requireAdmin, async (req, res) => {
   }
 });
 
+// Login Admin แยก Endpoint และ Session ออกจาก User
 app.post('/api/admin/login', async (req, res) => {
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const username = String(req.body.username || '').trim();
@@ -625,6 +658,7 @@ app.post('/api/admin/login', async (req, res) => {
   }
 });
 
+// ลบ Session Admin ออกจาก Database
 app.post('/api/admin/logout', requireAdmin, async (req, res) => {
   const token = (req.get('authorization') || '').slice(7);
   try {
@@ -636,6 +670,7 @@ app.post('/api/admin/logout', requireAdmin, async (req, res) => {
   }
 });
 
+// Admin เพิ่มสินค้าลง Inventory จริง
 app.post('/api/products', requireAdmin, async (req, res) => {
   const parsed = parseProduct(req.body);
   if (parsed.error) return res.status(400).json({ error: parsed.error });
@@ -655,6 +690,7 @@ app.post('/api/products', requireAdmin, async (req, res) => {
   }
 });
 
+// Admin แก้ไขสินค้าตาม ID ใน Inventory จริง
 app.put('/api/products/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Product ID ไม่ถูกต้อง' });
@@ -678,6 +714,7 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// Admin ลบสินค้าออกจาก Inventory จริง
 app.delete('/api/products/:id', requireAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Product ID ไม่ถูกต้อง' });
@@ -695,11 +732,13 @@ app.delete('/api/products/:id', requireAdmin, async (req, res) => {
   }
 });
 
+// ตัวดัก Error ชั้นสุดท้าย เผื่อ Route ไหนไม่ได้จัดการ Error เอง
 app.use((error, _req, res, _next) => {
   console.error('Unhandled request error:', error.message);
   res.status(500).json({ error: 'เกิดข้อผิดพลาดภายในระบบ' });
 });
 
+// ตอนเปิด Server จะเตรียมตารางก่อน ถ้าผ่านแล้วค่อยเปิดรับ Request
 ensureAuthTables()
   .then(() => {
     app.listen(port, '0.0.0.0', () => {

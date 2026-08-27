@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 
+// สคริปต์นี้เป็นเครื่องมือของ Expo สำหรับรีเซ็ตโปรเจกต์เป็นโครงว่าง
+// ตอนทำงานจริงของร้านไม่ควรรันไฟล์นี้ เพราะมันย้ายโฟลเดอร์โค้ดหลักออก
+
 /**
  * This script is used to reset the project to a blank state.
  * It deletes or moves the /app, /components, /hooks, /scripts, and /constants directories to /app-example based on user input and creates a new /app directory with an index.tsx and _layout.tsx file.

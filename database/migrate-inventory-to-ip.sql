@@ -1,4 +1,4 @@
--- Review both schema names before running this script in phpMyAdmin.
+-- ตรวจชื่อฐานข้อมูลทั้งสองฝั่งก่อนรันคำสั่งย้ายข้อมูลใน phpMyAdmin
 -- This migration copies data and intentionally does not delete the old table.
 
 CREATE TABLE IF NOT EXISTS `ip_std6730202467`.`Inventory`

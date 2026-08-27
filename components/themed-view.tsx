@@ -1,3 +1,4 @@
+// View component เดิมจาก template; หน้าร้านใหม่ใช้ Store theme เป็นหลัก
 import { View, type ViewProps } from 'react-native';
 
 import { useThemeColor } from '@/hooks/use-theme-color';

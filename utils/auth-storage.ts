@@ -1,3 +1,4 @@
+// Native เก็บ Token ใน SecureStore เพื่อไม่เก็บข้อมูล Login แบบเปิดเผย
 import * as SecureStore from 'expo-secure-store';
 
 export const authStorage = {

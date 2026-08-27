@@ -1,4 +1,4 @@
--- Run this after selecting the ip_std6730202467 database in phpMyAdmin.
+-- คำสั่งนี้ใช้สร้างตาราง Admin/Session หลังเลือกฐานข้อมูล ip_std6730202467 ใน phpMyAdmin
 
 CREATE TABLE IF NOT EXISTS `admin_users` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

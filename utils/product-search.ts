@@ -1,3 +1,4 @@
+// ฟังก์ชันค้นหากลาง: รองรับการพิมพ์บางส่วนและค้นหลายฟิลด์พร้อมกัน
 export type SearchableProduct = {
   product_name: string;
   description?: string | null;

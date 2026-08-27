@@ -1,3 +1,4 @@
+// Modal ตัวอย่างจาก Expo template; ไม่ใช่ Flow หลักของร้านตอนนี้
 import { Link } from 'expo-router';
 import { StyleSheet } from 'react-native';
 

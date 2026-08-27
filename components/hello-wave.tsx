@@ -1,3 +1,4 @@
+// Animation ตัวอย่างจาก Expo template ไม่เกี่ยวกับระบบร้านโดยตรง
 import Animated from 'react-native-reanimated';
 
 export function HelloWave() {

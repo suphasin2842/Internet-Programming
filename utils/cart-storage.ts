@@ -1,3 +1,4 @@
+// Native ติดตั้ง localStorage adapter ของ Expo SQLite ให้ CartProvider ใช้ได้
 import 'expo-sqlite/localStorage/install';
 
 export const cartStorage = {

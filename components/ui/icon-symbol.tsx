@@ -1,4 +1,4 @@
-// Fallback for using MaterialIcons on Android and web.
+// Icon fallback สำหรับ Android/Web จาก Expo template; หน้าร้านใช้ StoreIcon เป็นหลัก
 
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { SymbolWeight, SymbolViewProps } from 'expo-symbols';

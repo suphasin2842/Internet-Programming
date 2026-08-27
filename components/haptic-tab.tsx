@@ -1,3 +1,4 @@
+// ปุ่ม Tab ตัวอย่างที่เพิ่ม Haptic feedback บน iOS
 import { BottomTabBarButtonProps } from '@react-navigation/bottom-tabs';
 import { PlatformPressable } from '@react-navigation/elements';
 import * as Haptics from 'expo-haptics';

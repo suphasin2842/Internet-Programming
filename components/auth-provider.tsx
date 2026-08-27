@@ -1,8 +1,10 @@
+// AuthProvider คือศูนย์กลาง Login: ถือสถานะ User/Admin และแนบ Token ให้ API
 import { createContext, PropsWithChildren, use, useCallback, useEffect, useMemo, useState } from 'react';
 
 import { API_BASE_URL } from '@/constants/api';
 import { authStorage } from '@/utils/auth-storage';
 
+// แยก Key ของ User/Admin เพื่อไม่ให้บัญชีสองแบบปนกัน
 const USER_TOKEN_KEY = 'pan-and-toys-user-token-v1';
 const ADMIN_TOKEN_KEY = 'pan-and-toys-admin-token-v1';
 
@@ -34,6 +36,7 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// แปลง Error จาก API ให้หน้า Login/หน้าอื่นเอาไปแสดงได้ง่าย
 async function parseResponse(response: Response) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'ดำเนินการไม่สำเร็จ');
@@ -47,6 +50,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const [admin, setAdmin] = useState<AuthAdmin | null>(null);
   const [token, setToken] = useState<string | null>(null);
 
+  // เปิดแอปแล้วลองกู้ Session ที่เก็บไว้ก่อน ถ้าใช้ไม่ได้จึงลบทิ้ง
   useEffect(() => {
     let isMounted = true;
     async function restoreSession() {
@@ -94,6 +98,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     return () => { isMounted = false; };
   }, []);
 
+  // Login เลือก Endpoint ตามโหมด และเก็บ Token ใน Storage ที่เหมาะกับแพลตฟอร์ม
   const login = useCallback(async (identifier: string, password: string, mode: LoginMode) => {
     const endpoint = mode === 'admin' ? '/api/admin/login' : '/api/auth/login';
     const body = mode === 'admin' ? { username: identifier, password } : { identifier, password };
@@ -118,6 +123,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setToken(data.token);
   }, []);
 
+  // สมัคร User เสร็จแล้ว Login ต่อทันที เพื่อให้เริ่มใช้งานได้เลย
   const register = useCallback(async (input: { name: string; email: string; phone: string; password: string }) => {
     await parseResponse(await fetch(`${API_BASE_URL}/api/auth/register`, {
       method: 'POST',
@@ -127,6 +133,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     await login(input.name, input.password, 'user');
   }, [login]);
 
+  // แจ้ง Server ให้ลบ Session แล้วลบ Token ในเครื่องด้วย
   const logout = useCallback(async () => {
     const currentRole = role;
     const currentToken = token;
@@ -143,6 +150,7 @@ export function AuthProvider({ children }: PropsWithChildren) {
     setAdmin(null);
   }, [role, token]);
 
+  // Wrapper ของ fetch ที่เติม Authorization ให้ทุก Request ที่ต้องใช้สิทธิ์
   const authFetch = useCallback(async (url: string, options: RequestInit = {}) => {
     const headers = new Headers(options.headers);
     if (token) headers.set('Authorization', `Bearer ${token}`);

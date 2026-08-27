@@ -1,184 +1,98 @@
-import { Ionicons } from '@expo/vector-icons';
+// Sidebar ของผู้ใช้บน Desktop; Admin จะเห็นเมนูจัดการร้านเฉพาะเมื่อ Login แล้ว
 import { Link, usePathname } from 'expo-router';
-import { useRef, useState } from 'react';
-import {
-  Animated,
-  Easing,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { StoreColors, StoreRadii } from '@/constants/store-theme';
+import { useAuth } from '@/components/auth-provider';
+import { useCart } from '@/components/cart-provider';
+import { StoreBadge } from '@/components/ui/store-badge';
+import { StoreText } from '@/components/ui/store-text';
+import { StoreIcon } from '@/components/ui/store-icon';
+import { StoreColors, StoreRadii, StoreSpacing } from '@/constants/store-theme';
 
 const userMenuItems = [
   { href: '/' as const, icon: 'home-outline' as const, label: 'หน้าหลัก' },
   { href: '/categories' as const, icon: 'grid-outline' as const, label: 'หมวดหมู่สินค้า' },
-  { href: '/cart' as const, icon: 'cart-outline' as const, label: 'ตะกร้าสินค้า' },
-  { href: '/profile' as const, icon: 'person-circle-outline' as const, label: 'โปรไฟล์' },
+  { href: '/cart' as const, icon: 'bag-handle-outline' as const, label: 'ตะกร้าสินค้า' },
+  { href: '/profile' as const, icon: 'person-outline' as const, label: 'โปรไฟล์' },
 ];
 
 export function UserSidebar() {
   const insets = useSafeAreaInsets();
   const pathname = usePathname();
-  const [isOpen, setIsOpen] = useState(false);
-  const progress = useRef(new Animated.Value(1)).current;
-
-  const openSidebar = () => {
-    progress.setValue(1);
-    setIsOpen(true);
-    requestAnimationFrame(() => {
-      Animated.timing(progress, {
-        toValue: 0,
-        duration: 260,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }).start();
-    });
-  };
-
-  const closeSidebar = () => {
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: 210,
-      easing: Easing.in(Easing.cubic),
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) setIsOpen(false);
-    });
-  };
+  const { role, user, admin } = useAuth();
+  const { itemCount } = useCart();
 
   return (
-    <>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="เปิดเมนูหลัก"
-        accessibilityState={{ expanded: isOpen }}
-        onPress={openSidebar}
-        hitSlop={8}
-        style={({ pressed }) => [
-          styles.menuButton,
-          { top: insets.top + 10 },
-          pressed && styles.pressed,
-        ]}>
-        <Ionicons name="menu" size={25} color={StoreColors.white} />
-      </Pressable>
+    <View style={[styles.sidebar, { paddingTop: Math.max(insets.top, StoreSpacing.lg), paddingBottom: Math.max(insets.bottom, StoreSpacing.md) }]}>
+      <Link href="/" asChild>
+        <Pressable accessibilityRole="link" accessibilityLabel="ไปหน้าหลัก" style={({ pressed }) => [styles.brand, pressed && styles.pressed]}>
+          <View style={styles.logo}><StoreIcon name="sparkles" size={21} color={StoreColors.text} /></View>
+          <View style={styles.brandCopy}>
+            <StoreText variant="heading" style={styles.brandTitle}>PAN &amp; TOYS</StoreText>
+            <StoreText variant="caption">Wacky Toy World</StoreText>
+          </View>
+        </Pressable>
+      </Link>
 
-      <Modal
-        animationType="none"
-        transparent
-        statusBarTranslucent
-        visible={isOpen}
-        onRequestClose={closeSidebar}>
-        <View style={styles.layer}>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.backdrop,
-              { opacity: progress.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }) },
-            ]}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="ปิดเมนูหลัก"
-            onPress={closeSidebar}
-            style={styles.dismissArea}
-          />
-          <Animated.View
-            accessibilityViewIsModal
-            style={[
-              styles.drawer,
-              {
-                paddingTop: insets.top + 28,
-                paddingBottom: insets.bottom + 24,
-                transform: [{
-                  translateX: progress.interpolate({ inputRange: [0, 1], outputRange: [0, -280] }),
-                }],
-              },
-            ]}>
-            <View style={styles.heading}>
-              <Text style={styles.title}>เมนู</Text>
-              <Text style={styles.subtitle}>PAN &amp; TOYS</Text>
-            </View>
+      <View style={styles.menu}>
+        <StoreText variant="caption" style={styles.menuCaption}>เมนูหลัก</StoreText>
+        {userMenuItems.map((item) => {
+          const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
+          return (
+            <Link key={item.href} href={item.href} asChild>
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={item.label}
+                accessibilityState={{ selected: isActive }}
+                style={({ pressed }) => [styles.menuItem, isActive && styles.activeMenuItem, pressed && styles.pressed]}>
+                <View style={[styles.menuIcon, isActive && styles.activeMenuIcon]}>
+                  <StoreIcon name={item.icon} size={20} color={isActive ? StoreColors.white : StoreColors.text} />
+                </View>
+                <StoreText variant="label" style={styles.menuLabel}>{item.label}</StoreText>
+                {item.href === '/cart' && itemCount > 0 && <StoreBadge label={String(itemCount)} tone="accent" />}
+              </Pressable>
+            </Link>
+          );
+        })}
 
-            {userMenuItems.map((item) => {
-              const isActive = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
-              return (
-                <Link key={item.href} href={item.href} asChild>
-                  <Pressable
-                    accessibilityRole="link"
-                    accessibilityLabel={item.label}
-                    accessibilityState={{ selected: isActive }}
-                    onPress={closeSidebar}
-                    style={({ pressed }) => [
-                      styles.menuItem,
-                      isActive && styles.activeMenuItem,
-                      pressed && styles.pressed,
-                    ]}>
-                    <Ionicons name={item.icon} size={22} color={StoreColors.ink} />
-                    <Text numberOfLines={2} style={styles.menuText}>{item.label}</Text>
-                  </Pressable>
-                </Link>
-              );
-            })}
-          </Animated.View>
+        {role === 'admin' && (
+          <Link href="/admin" asChild>
+            <Pressable accessibilityRole="link" accessibilityLabel="จัดการร้านค้า" style={({ pressed }) => [styles.menuItem, pressed && styles.pressed]}>
+              <View style={[styles.menuIcon, styles.adminIcon]}><StoreIcon name="pencil-outline" size={20} color={StoreColors.text} /></View>
+              <StoreText variant="label" style={styles.menuLabel}>จัดการร้านค้า</StoreText>
+            </Pressable>
+          </Link>
+        )}
+      </View>
+
+      <View style={styles.accountCard}>
+        <View style={styles.avatar}><StoreIcon name={role === 'admin' ? 'shield-checkmark-outline' : 'person-outline'} size={20} color={StoreColors.primary} /></View>
+        <View style={styles.accountCopy}>
+          <StoreText variant="label" numberOfLines={1}>{role === 'user' ? user?.name : role === 'admin' ? admin?.username : 'ผู้เยี่ยมชม'}</StoreText>
+          <StoreText variant="caption" numberOfLines={1}>{role === 'admin' ? 'Admin' : role === 'user' ? 'สมาชิก' : 'ยังไม่ได้เข้าสู่ระบบ'}</StoreText>
         </View>
-      </Modal>
-    </>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  menuButton: {
-    position: 'absolute',
-    left: 14,
-    zIndex: 100,
-    width: 42,
-    height: 42,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: StoreColors.jungleDark,
-    borderWidth: 2,
-    borderColor: StoreColors.ink,
-    borderRadius: StoreRadii.small,
-    borderCurve: 'continuous',
-    boxShadow: `2px 2px 0 ${StoreColors.ink}`,
-  },
-  layer: { flex: 1, flexDirection: 'row' },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0, 0, 0, 0.5)' },
-  dismissArea: { ...StyleSheet.absoluteFillObject },
-  drawer: {
-    width: '30%',
-    minWidth: 180,
-    maxWidth: 280,
-    height: '100%',
-    paddingHorizontal: 12,
-    gap: 8,
-    backgroundColor: StoreColors.mintSoft,
-    borderRightWidth: 3,
-    borderRightColor: StoreColors.ink,
-    boxShadow: '5px 0 0 rgba(14, 42, 26, 0.28)',
-  },
-  heading: { paddingHorizontal: 4, paddingBottom: 14, gap: 2 },
-  title: { color: StoreColors.jungleDark, fontSize: 27, fontWeight: '900' },
-  subtitle: { color: StoreColors.jungle, fontSize: 12, fontWeight: '800', letterSpacing: 1 },
-  menuItem: {
-    minHeight: 52,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-    backgroundColor: StoreColors.white,
-    borderWidth: 2,
-    borderColor: StoreColors.ink,
-    borderRadius: StoreRadii.small,
-    borderCurve: 'continuous',
-  },
-  activeMenuItem: { backgroundColor: StoreColors.electric },
-  menuText: { flex: 1, color: StoreColors.ink, fontSize: 13, lineHeight: 17, fontWeight: '800' },
-  pressed: { opacity: 0.75, transform: [{ translateX: 1 }, { translateY: 1 }] },
+  sidebar: { width: 236, height: '100%', paddingHorizontal: StoreSpacing.md, gap: StoreSpacing.xl, backgroundColor: StoreColors.surface, borderRightWidth: 1, borderRightColor: '#DCE9E1' },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm },
+  logo: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.electric, borderRadius: StoreRadii.medium, transform: [{ rotate: '-5deg' }] },
+  brandCopy: { flex: 1 },
+  brandTitle: { color: StoreColors.primary, fontSize: 17, lineHeight: 23 },
+  menu: { flex: 1, gap: StoreSpacing.xs },
+  menuCaption: { paddingHorizontal: StoreSpacing.sm, paddingBottom: StoreSpacing.xxs },
+  menuItem: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm, paddingHorizontal: StoreSpacing.xs, borderRadius: StoreRadii.medium, borderCurve: 'continuous' },
+  activeMenuItem: { backgroundColor: StoreColors.primarySoft },
+  menuIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.surfaceAlt, borderRadius: StoreRadii.small },
+  activeMenuIcon: { backgroundColor: StoreColors.primary },
+  adminIcon: { backgroundColor: StoreColors.yellow },
+  menuLabel: { flex: 1 },
+  accountCard: { flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm, padding: StoreSpacing.sm, backgroundColor: StoreColors.surfaceAlt, borderRadius: StoreRadii.medium, borderCurve: 'continuous' },
+  avatar: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.surface, borderRadius: StoreRadii.pill },
+  accountCopy: { flex: 1 },
+  pressed: { opacity: 0.72, transform: [{ scale: 0.98 }] },
 });

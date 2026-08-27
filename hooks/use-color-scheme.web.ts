@@ -1,3 +1,4 @@
+// Web ต้องรอ Hydrate ก่อนอ่าน color scheme เพื่อไม่ให้ SSR กับ Client ต่างกัน
 import { useEffect, useState } from 'react';
 import { useColorScheme as useRNColorScheme } from 'react-native';
 

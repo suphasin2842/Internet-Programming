@@ -1,3 +1,4 @@
+// Text component เดิมจาก template; หน้าร้านใหม่ใช้ StoreText เป็นหลัก
 import { StyleSheet, Text, type TextProps } from 'react-native';
 
 import { useThemeColor } from '@/hooks/use-theme-color';

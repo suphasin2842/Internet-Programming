@@ -1,3 +1,4 @@
+// Collapsible ตัวอย่างจาก template สำหรับเปิด/ปิดเนื้อหา
 import { PropsWithChildren, useState } from 'react';
 import { StyleSheet, TouchableOpacity } from 'react-native';
 

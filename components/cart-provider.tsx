@@ -1,3 +1,4 @@
+// CartProvider ดูแลตะกร้าและแยกข้อมูลตาม Guest/User/Admin ไม่ให้ตะกร้าปนกัน
 import { createContext, PropsWithChildren, use, useEffect, useMemo, useState } from 'react';
 
 import { useAuth } from '@/components/auth-provider';
@@ -23,6 +24,7 @@ type CartContextValue = {
   clearCart: () => void;
 };
 
+// ใช้ Prefix เดียวกัน แต่ต่อท้ายด้วย Scope ของบัญชี
 const CART_STORAGE_PREFIX = 'pan-and-toys-cart-v2';
 const CartContext = createContext<CartContextValue | null>(null);
 
@@ -30,6 +32,7 @@ export function CartProvider({ children }: PropsWithChildren) {
   const { isLoading: isAuthLoading, role, user, admin } = useAuth();
   const [items, setItems] = useState<CartItem[]>([]);
   const [loadedScope, setLoadedScope] = useState<string | null>(null);
+  // ถ้ายังเช็ก Login ไม่เสร็จให้รอก่อน ไม่งั้นอาจโหลดตะกร้าผิดบัญชี
   const storageScope = isAuthLoading
     ? null
     : role === 'user' && user
@@ -38,6 +41,7 @@ export function CartProvider({ children }: PropsWithChildren) {
         ? `admin:${admin.username}`
         : 'guest';
 
+  // โหลดตะกร้าของ Scope ปัจจุบันจาก Storage
   useEffect(() => {
     if (!storageScope) {
       setItems([]);
@@ -63,12 +67,14 @@ export function CartProvider({ children }: PropsWithChildren) {
     return () => { isMounted = false; };
   }, [storageScope]);
 
+  // บันทึกทุกครั้งที่รายการในตะกร้าเปลี่ยน
   useEffect(() => {
     if (storageScope && loadedScope === storageScope) {
       cartStorage.setItem(`${CART_STORAGE_PREFIX}:${storageScope}`, JSON.stringify(items));
     }
   }, [items, loadedScope, storageScope]);
 
+  // ฟังก์ชันเพิ่ม/ลด/ลบ/ล้างตะกร้าให้ทุกหน้าร้านเรียกใช้ชุดเดียวกัน
   const value = useMemo<CartContextValue>(() => ({
     items,
     itemCount: items.reduce((sum, item) => sum + item.quantity, 0),

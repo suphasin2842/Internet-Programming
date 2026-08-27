@@ -1,3 +1,4 @@
+// สคริปต์นี้ใช้สร้างหรือเปลี่ยน Admin ใน Database จากค่า NEW_ADMIN_* ใน .env
 require('dotenv').config();
 
 const crypto = require('crypto');
@@ -6,6 +7,7 @@ const mysql = require('mysql2/promise');
 
 const scryptAsync = promisify(crypto.scrypt);
 
+// สร้าง scrypt hash แล้ว Upsert บัญชี Admin โดยไม่เก็บรหัสผ่านดิบ
 async function createAdmin() {
   const username = String(process.env.NEW_ADMIN_USERNAME || 'admin').trim();
   const password = String(process.env.NEW_ADMIN_PASSWORD || '');
