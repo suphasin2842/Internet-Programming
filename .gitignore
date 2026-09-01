@@ -38,6 +38,7 @@ yarn-error.*
 tmp/
 temp/
 *.tmp
+uploads/
 
 # macOS
 .DS_Store

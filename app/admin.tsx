@@ -1,10 +1,12 @@
 // Admin Dashboard: จัดการ Inventory และ Order โดยทุก Mutation ผ่าน API ที่ requireAdmin
 import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import { Redirect, Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -71,6 +73,7 @@ export default function AdminScreen() {
   const [ordersError, setOrdersError] = useState('');
   const [updatingOrderId, setUpdatingOrderId] = useState<string | number | null>(null);
   const [imageFailed, setImageFailed] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
 
   // กรองรายการสินค้าฝั่งหน้าจอ เพื่อให้ค้นหาในชื่อ SKU หรือหมวดได้ทันที
   const filteredProducts = useMemo(() => {
@@ -80,6 +83,7 @@ export default function AdminScreen() {
   }, [productSearch, products]);
   const pendingOrders = orders.filter((order) => order.status === 'pending').length;
   const categoryCount = new Set(products.map((product) => product.category?.trim()).filter(Boolean)).size;
+  const imagePreviewUri = selectedImage?.uri || form.image_url.trim();
 
   // โหลด Inventory สำหรับรายการและตัวเลขสรุปบน Dashboard
   useEffect(() => {
@@ -108,6 +112,7 @@ export default function AdminScreen() {
     if (!isAdmin || !selectedProductId) {
       setForm(emptyProduct);
       setImageFailed(false);
+      setSelectedImage(null);
       setShowDeleteConfirmation(false);
       return;
     }
@@ -122,6 +127,7 @@ export default function AdminScreen() {
         if (!response.ok) throw new Error(product.error || 'โหลดข้อมูลสินค้าไม่สำเร็จ');
         setForm(productToForm(product));
         setImageFailed(false);
+        setSelectedImage(null);
       } catch (loadError) {
         if (!controller.signal.aborted) setError(loadError instanceof Error ? loadError.message : 'โหลดข้อมูลสินค้าไม่สำเร็จ');
       } finally {
@@ -165,6 +171,8 @@ export default function AdminScreen() {
     setForm(emptyProduct);
     setMessage('');
     setError('');
+    setSelectedImage(null);
+    setImageFailed(false);
     setShowDeleteConfirmation(false);
     router.replace('/admin');
   }
@@ -173,6 +181,7 @@ export default function AdminScreen() {
     setActiveSection('products');
     setMessage('');
     setError('');
+    setSelectedImage(null);
     router.replace({ pathname: '/admin', params: { productId: String(id) } });
   }
 
@@ -181,10 +190,80 @@ export default function AdminScreen() {
     if (form.description.trim().length > 2000) return 'รายละเอียดสินค้ายาวเกิน 2,000 ตัวอักษร';
     const price = Number(form.price);
     if (!Number.isFinite(price) || price < 0 || price > 99999999.99) return 'ราคาสินค้าไม่ถูกต้อง';
-    if (!/^https?:\/\//i.test(form.image_url.trim()) || form.image_url.trim().length > 2048) return 'URL รูปภาพต้องขึ้นต้นด้วย http:// หรือ https://';
+    if (!selectedImage && (!/^https?:\/\//i.test(form.image_url.trim()) || form.image_url.trim().length > 2048)) return 'กรุณาเลือกไฟล์รูป หรือใส่ URL ที่ขึ้นต้นด้วย http:// หรือ https://';
     if (!/^[A-Za-z0-9_-]{2,50}$/.test(form.sku.trim())) return 'SKU ใช้ได้เฉพาะ A-Z, 0-9, _ และ -';
     if (form.category.trim().length < 2 || form.category.trim().length > 80) return 'หมวดหมู่ต้องมี 2-80 ตัวอักษร';
     return '';
+  }
+
+  // เปิดคลังรูปของเครื่อง แล้วเก็บไฟล์ไว้รออัปโหลดตอนกดบันทึกสินค้า
+  async function pickProductImage() {
+    setError('');
+    setMessage('');
+    try {
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          setError('กรุณาอนุญาตให้แอปเข้าถึงรูปภาพก่อน');
+          return;
+        }
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: false,
+        allowsMultipleSelection: false,
+        quality: 0.85,
+        selectionLimit: 1,
+      });
+      if (result.canceled || !result.assets[0]) return;
+
+      const asset = result.assets[0];
+      const fileSize = asset.fileSize ?? asset.file?.size ?? 0;
+      if (fileSize > 5 * 1024 * 1024) {
+        setError('รูปสินค้าต้องมีขนาดไม่เกิน 5 MB');
+        return;
+      }
+      if (!getImageMimeType(asset)) {
+        setError('รองรับเฉพาะไฟล์ JPG, PNG หรือ WebP');
+        return;
+      }
+
+      setSelectedImage(asset);
+      setImageFailed(false);
+    } catch (pickError) {
+      setError(pickError instanceof Error ? pickError.message : 'เปิดคลังรูปภาพไม่สำเร็จ');
+    }
+  }
+
+  async function uploadProductImage(asset: ImagePicker.ImagePickerAsset) {
+    const mimeType = getImageMimeType(asset);
+    if (!mimeType) throw new Error('ชนิดไฟล์รูปภาพไม่รองรับ');
+
+    const uploadBody = new FormData();
+    if (Platform.OS === 'web' && asset.file) {
+      uploadBody.append('image', asset.file, asset.fileName || asset.file.name);
+    } else {
+      const extension = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg';
+      uploadBody.append('image', {
+        uri: asset.uri,
+        name: asset.fileName || `product-${Date.now()}.${extension}`,
+        type: mimeType,
+      } as unknown as Blob);
+    }
+
+    const response = await authFetch('/api/admin/uploads/product-image', {
+      method: 'POST',
+      body: uploadBody,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      await logout();
+      throw new Error('Session Admin หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+    }
+    if (!response.ok) throw new Error(data.error || 'อัปโหลดรูปสินค้าไม่สำเร็จ');
+    if (!data.image_url) throw new Error('Server ไม่ได้ส่ง URL รูปภาพกลับมา');
+    return String(data.image_url);
   }
 
   // POST ตอนเพิ่มใหม่, PUT ตอนแก้ไข โดยตรวจข้อมูลซ้ำกับกฎของ Server ก่อน
@@ -194,8 +273,9 @@ export default function AdminScreen() {
     setIsSubmitting(true);
     setError('');
     setMessage('');
-    const body = { ...form, price: Number(form.price), sku: form.sku.trim().toUpperCase() };
     try {
+      const imageUrl = selectedImage ? await uploadProductImage(selectedImage) : form.image_url.trim();
+      const body = { ...form, image_url: imageUrl, price: Number(form.price), sku: form.sku.trim().toUpperCase() };
       const response = await authFetch(selectedProductId ? `/api/products/${encodeURIComponent(selectedProductId)}` : '/api/products', {
         method: selectedProductId ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -208,10 +288,12 @@ export default function AdminScreen() {
       if (selectedProductId) {
         setProducts((current) => current.map((product) => String(product.id) === String(selectedProductId) ? savedProduct : product));
         setForm(productToForm(savedProduct));
+        setSelectedImage(null);
         setMessage('บันทึกการแก้ไขสินค้าเรียบร้อยแล้ว');
       } else {
         setProducts((current) => [savedProduct, ...current]);
         setForm(emptyProduct);
+        setSelectedImage(null);
         setMessage('เพิ่มสินค้าใหม่ลง Inventory เรียบร้อยแล้ว');
       }
     } catch (saveError) {
@@ -297,9 +379,14 @@ export default function AdminScreen() {
               <View style={[styles.editorPanel, isDesktop && styles.editorPanelDesktop]}>
                 <View style={styles.panelHeading}><View><StoreText variant="heading">{selectedProductId ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}</StoreText><StoreText variant="caption">ข้อมูลจะถูกบันทึกลง Inventory จริง</StoreText></View><StoreBadge label={selectedProductId ? 'EDIT MODE' : 'NEW PRODUCT'} tone={selectedProductId ? 'accent' : 'success'} /></View>
                 {isLoadingProduct ? <LoadingState label="กำลังโหลดข้อมูลสินค้า" /> : <>
-                  <View style={styles.previewRow}><View style={styles.previewImageFrame}>{form.image_url && !imageFailed ? <Image source={{ uri: form.image_url }} style={styles.previewImage} contentFit="cover" cachePolicy="memory-disk" onError={() => setImageFailed(true)} /> : <View style={styles.previewEmpty}><StoreIcon name="image-outline" size={26} color={StoreColors.textMuted} /></View>}</View><View style={styles.previewCopy}><StoreText variant="label">Preview รูปสินค้า</StoreText><StoreText variant="caption">กรอก URL ในช่องด้านล่าง Preview จะเปลี่ยนตามลิงก์</StoreText></View></View>
-                  {/* ช่องนี้คือจุดที่ Admin ต้องพิมพ์หรือวางลิงก์รูปจริง */}
-                  <AdminInput label="URL รูปภาพ" value={form.image_url} onChangeText={(value) => { updateForm('image_url', value); setImageFailed(false); }} placeholder="https://example.com/image.jpg" autoCapitalize="none" autoCorrect={false} keyboardType="url" textContentType="URL" />
+                  <View style={styles.previewRow}><View style={styles.previewImageFrame}>{imagePreviewUri && !imageFailed ? <Image source={{ uri: imagePreviewUri }} style={styles.previewImage} contentFit="cover" cachePolicy="memory-disk" onError={() => setImageFailed(true)} /> : <View style={styles.previewEmpty}><StoreIcon name="image-outline" size={26} color={StoreColors.textMuted} /></View>}</View><View style={styles.previewCopy}><StoreText variant="label">Preview รูปสินค้า</StoreText><StoreText variant="caption">{selectedImage ? `เลือกแล้ว: ${selectedImage.fileName || 'รูปจากเครื่อง'}` : 'ใส่ URL หรือเลือกรูปจากเครื่องได้อย่างใดอย่างหนึ่ง'}</StoreText></View></View>
+                  <View style={styles.imageSourceActions}>
+                    <StoreButton title={selectedImage ? 'เปลี่ยนรูปจากเครื่อง' : 'เลือกรูปจากเครื่อง'} icon="cloud-upload-outline" variant="outline" size="sm" disabled={isSubmitting} onPress={() => void pickProductImage()} />
+                    {selectedImage && <StoreButton title="ยกเลิกไฟล์ที่เลือก" icon="close-circle-outline" variant="ghost" size="sm" disabled={isSubmitting} onPress={() => { setSelectedImage(null); setImageFailed(false); }} />}
+                    <StoreText variant="caption" style={styles.imageHint}>รองรับ JPG, PNG และ WebP ขนาดไม่เกิน 5 MB</StoreText>
+                  </View>
+                  {/* ถ้าเลือกไฟล์จากเครื่อง ไฟล์นั้นจะแทน URL นี้ตอนกดบันทึก */}
+                  <AdminInput label="URL รูปภาพ (ไม่ต้องกรอกถ้าเลือกไฟล์)" value={form.image_url} onChangeText={(value) => { setSelectedImage(null); updateForm('image_url', value); setImageFailed(false); }} placeholder="https://example.com/image.jpg" autoCapitalize="none" autoCorrect={false} keyboardType="url" textContentType="URL" />
                   <AdminInput label="ชื่อสินค้า" value={form.product_name} onChangeText={(value) => updateForm('product_name', value)} placeholder="เช่น Robot Explorer" />
                   <AdminInput label="รายละเอียด" value={form.description} onChangeText={(value) => updateForm('description', value)} placeholder="รายละเอียดสินค้า" multiline />
                   <View style={styles.formColumns}><View style={styles.formColumn}><AdminInput label="ราคา (THB)" value={form.price} onChangeText={(value) => updateForm('price', value)} placeholder="0.00" keyboardType="decimal-pad" /></View><View style={styles.formColumn}><AdminInput label="SKU" value={form.sku} onChangeText={(value) => updateForm('sku', value)} placeholder="RO-001" autoCapitalize="characters" /></View></View>
@@ -331,6 +418,15 @@ function productToForm(product: Partial<Product>): ProductForm { return { produc
 function orderStatusLabel(status: string) { return ({ pending: 'รอดำเนินการ', confirmed: 'ยืนยันแล้ว', shipped: 'กำลังจัดส่ง', delivered: 'จัดส่งสำเร็จ', cancelled: 'ยกเลิก' } as Record<string, string>)[status] || status; }
 function formatMoney(value: string | number) { const amount = Number(value); return Number.isFinite(amount) ? `${amount.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} THB` : `${value} THB`; }
 function formatDate(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString('th-TH'); }
+function getImageMimeType(asset: ImagePicker.ImagePickerAsset) {
+  const mimeType = String(asset.mimeType || asset.file?.type || '').toLowerCase();
+  if (mimeType === 'image/jpeg' || mimeType === 'image/png' || mimeType === 'image/webp') return mimeType;
+  const filename = String(asset.fileName || asset.file?.name || asset.uri).toLowerCase().split('?')[0];
+  if (filename.endsWith('.jpg') || filename.endsWith('.jpeg')) return 'image/jpeg';
+  if (filename.endsWith('.png')) return 'image/png';
+  if (filename.endsWith('.webp')) return 'image/webp';
+  return '';
+}
 
 const statTone = StyleSheet.create({ green: { backgroundColor: StoreColors.primarySoft }, purple: { backgroundColor: StoreColors.lavender }, orange: { backgroundColor: StoreColors.peach }, yellow: { backgroundColor: '#FFF2B8' } });
 
@@ -340,6 +436,6 @@ const styles = StyleSheet.create({
   statsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: StoreSpacing.sm }, statCard: { flex: 1, minWidth: 190, minHeight: 108, flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm, padding: StoreSpacing.md, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: '#D5E5DB', borderRadius: StoreRadii.medium, borderCurve: 'continuous', boxShadow: StoreShadows.card }, statIcon: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: StoreRadii.pill }, statValue: { fontSize: 25, lineHeight: 32 },
   sectionTabs: { flexDirection: 'row', gap: StoreSpacing.xs, padding: StoreSpacing.xxs, backgroundColor: StoreColors.surfaceAlt, borderRadius: StoreRadii.pill, alignSelf: 'flex-start' }, dashboardTab: { minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.xs, paddingHorizontal: StoreSpacing.md, borderRadius: StoreRadii.pill }, dashboardTabActive: { backgroundColor: StoreColors.surface, boxShadow: StoreShadows.card }, dashboardTabTextActive: { color: StoreColors.primary },
   workspace: { gap: StoreSpacing.lg }, workspaceDesktop: { flexDirection: 'row', alignItems: 'flex-start' }, inventoryPanel: { width: '100%', padding: StoreSpacing.md, gap: StoreSpacing.md, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: '#D5E5DB', borderRadius: StoreRadii.large, borderCurve: 'continuous', boxShadow: StoreShadows.card }, inventoryPanelDesktop: { flex: 0.9 }, editorPanel: { width: '100%', padding: StoreSpacing.lg, gap: StoreSpacing.md, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: '#D5E5DB', borderRadius: StoreRadii.large, borderCurve: 'continuous', boxShadow: StoreShadows.card }, editorPanelDesktop: { flex: 1.1 }, ordersPanel: { padding: StoreSpacing.lg, gap: StoreSpacing.md, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: '#D5E5DB', borderRadius: StoreRadii.large, borderCurve: 'continuous', boxShadow: StoreShadows.card }, panelHeading: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: StoreSpacing.md }, searchShell: { minHeight: 46, flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.xs, paddingHorizontal: StoreSpacing.sm, backgroundColor: StoreColors.surfaceAlt, borderWidth: 1, borderColor: '#C9DCD0', borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, searchInput: { flex: 1, minWidth: 0, minHeight: 44, color: StoreColors.text, fontFamily: StoreFonts.body, fontSize: 14 }, productList: { gap: StoreSpacing.xs }, productRow: { minHeight: 76, flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm, padding: StoreSpacing.xs, backgroundColor: StoreColors.surfaceAlt, borderWidth: 1, borderColor: 'transparent', borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, productRowSelected: { backgroundColor: StoreColors.primarySoft, borderColor: StoreColors.primary }, productThumb: { width: 58, height: 58, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', backgroundColor: StoreColors.mintMuted, borderRadius: StoreRadii.small, borderCurve: 'continuous' }, productThumbImage: { width: '100%', height: '100%' }, productRowCopy: { flex: 1, minWidth: 0, gap: 1 }, rowPrice: { color: StoreColors.primary, fontFamily: StoreFonts.semibold }, rowEditIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.surface, borderRadius: StoreRadii.pill }, rowEditIconSelected: { backgroundColor: StoreColors.primary },
-  previewRow: { flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm, padding: StoreSpacing.sm, backgroundColor: StoreColors.surfaceAlt, borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, previewImageFrame: { width: 72, height: 72, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.mintMuted, borderRadius: StoreRadii.small, borderCurve: 'continuous' }, previewImage: { width: '100%', height: '100%' }, previewEmpty: { alignItems: 'center', justifyContent: 'center' }, previewCopy: { flex: 1, gap: StoreSpacing.xxs }, formColumns: { flexDirection: 'row', flexWrap: 'wrap', gap: StoreSpacing.sm }, formColumn: { flex: 1, minWidth: 210 }, field: { gap: StoreSpacing.xs }, input: { minHeight: 48, color: StoreColors.text, fontFamily: StoreFonts.body, fontSize: 15, backgroundColor: StoreColors.surfaceAlt, borderWidth: 1, borderColor: '#C9DCD0', borderRadius: StoreRadii.medium, borderCurve: 'continuous', paddingHorizontal: StoreSpacing.sm }, multilineInput: { minHeight: 110, paddingTop: StoreSpacing.sm, textAlignVertical: 'top' }, actionRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: StoreSpacing.sm }, saveButton: { flexGrow: 1 }, feedback: { flexDirection: 'row', alignItems: 'flex-start', gap: StoreSpacing.xs, padding: StoreSpacing.sm, borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, feedbackDanger: { backgroundColor: '#FFF0F0' }, feedbackSuccess: { backgroundColor: '#E5F9EC' }, feedbackDangerText: { flex: 1, color: StoreColors.danger }, feedbackSuccessText: { flex: 1, color: StoreColors.success }, deleteZone: { gap: StoreSpacing.sm, padding: StoreSpacing.md, backgroundColor: '#FFF3F0', borderWidth: 1, borderColor: '#F0A39A', borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, deleteHeading: { flexDirection: 'row', alignItems: 'flex-start', gap: StoreSpacing.xs }, deleteCopy: { flex: 1, gap: StoreSpacing.xxs }, deleteTitle: { color: StoreColors.danger }, deleteButton: { alignSelf: 'flex-start' }, confirmBox: { gap: StoreSpacing.sm, padding: StoreSpacing.sm, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: StoreColors.danger, borderRadius: StoreRadii.small, borderCurve: 'continuous' },
+  previewRow: { flexDirection: 'row', alignItems: 'center', gap: StoreSpacing.sm, padding: StoreSpacing.sm, backgroundColor: StoreColors.surfaceAlt, borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, previewImageFrame: { width: 72, height: 72, overflow: 'hidden', alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.mintMuted, borderRadius: StoreRadii.small, borderCurve: 'continuous' }, previewImage: { width: '100%', height: '100%' }, previewEmpty: { alignItems: 'center', justifyContent: 'center' }, previewCopy: { flex: 1, gap: StoreSpacing.xxs }, imageSourceActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: StoreSpacing.xs }, imageHint: { flexBasis: '100%', color: StoreColors.textMuted }, formColumns: { flexDirection: 'row', flexWrap: 'wrap', gap: StoreSpacing.sm }, formColumn: { flex: 1, minWidth: 210 }, field: { gap: StoreSpacing.xs }, input: { minHeight: 48, color: StoreColors.text, fontFamily: StoreFonts.body, fontSize: 15, backgroundColor: StoreColors.surfaceAlt, borderWidth: 1, borderColor: '#C9DCD0', borderRadius: StoreRadii.medium, borderCurve: 'continuous', paddingHorizontal: StoreSpacing.sm }, multilineInput: { minHeight: 110, paddingTop: StoreSpacing.sm, textAlignVertical: 'top' }, actionRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: StoreSpacing.sm }, saveButton: { flexGrow: 1 }, feedback: { flexDirection: 'row', alignItems: 'flex-start', gap: StoreSpacing.xs, padding: StoreSpacing.sm, borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, feedbackDanger: { backgroundColor: '#FFF0F0' }, feedbackSuccess: { backgroundColor: '#E5F9EC' }, feedbackDangerText: { flex: 1, color: StoreColors.danger }, feedbackSuccessText: { flex: 1, color: StoreColors.success }, deleteZone: { gap: StoreSpacing.sm, padding: StoreSpacing.md, backgroundColor: '#FFF3F0', borderWidth: 1, borderColor: '#F0A39A', borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, deleteHeading: { flexDirection: 'row', alignItems: 'flex-start', gap: StoreSpacing.xs }, deleteCopy: { flex: 1, gap: StoreSpacing.xxs }, deleteTitle: { color: StoreColors.danger }, deleteButton: { alignSelf: 'flex-start' }, confirmBox: { gap: StoreSpacing.sm, padding: StoreSpacing.sm, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: StoreColors.danger, borderRadius: StoreRadii.small, borderCurve: 'continuous' },
   ordersIcon: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.primarySoft, borderRadius: StoreRadii.pill }, ordersList: { gap: StoreSpacing.sm }, orderRow: { gap: StoreSpacing.xs, padding: StoreSpacing.md, backgroundColor: StoreColors.surfaceAlt, borderWidth: 1, borderColor: '#D5E5DB', borderRadius: StoreRadii.medium, borderCurve: 'continuous' }, orderTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: StoreSpacing.sm }, orderIdWrap: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: StoreSpacing.xs }, orderActions: { flexDirection: 'row', flexWrap: 'wrap', gap: StoreSpacing.xs, paddingTop: StoreSpacing.xs }, orderAction: { minHeight: 35, minWidth: 68, alignItems: 'center', justifyContent: 'center', paddingHorizontal: StoreSpacing.xs, backgroundColor: StoreColors.surface, borderWidth: 1, borderColor: '#C9DCD0', borderRadius: StoreRadii.small, borderCurve: 'continuous' }, orderActionActive: { backgroundColor: StoreColors.electric, borderColor: StoreColors.primary }, orderActionText: { color: StoreColors.text, fontFamily: StoreFonts.semibold }, state: { minHeight: 170, alignItems: 'center', justifyContent: 'center', gap: StoreSpacing.xs, padding: StoreSpacing.lg }, stateIcon: { width: 54, height: 54, alignItems: 'center', justifyContent: 'center', backgroundColor: StoreColors.primarySoft, borderRadius: StoreRadii.pill }, stateDescription: { textAlign: 'center' }, pressed: { opacity: 0.82, transform: [{ scale: 0.985 }] }, disabled: { opacity: 0.55 },
 });

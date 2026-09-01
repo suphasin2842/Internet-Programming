@@ -2,9 +2,12 @@
 require('dotenv').config();
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { promisify } = require('util');
 const cors = require('cors');
 const express = require('express');
+const multer = require('multer');
 const mysql = require('mysql2/promise');
 
 const app = express();
@@ -14,6 +17,33 @@ const scryptAsync = promisify(crypto.scrypt);
 const sessionLifetimeMs = 2 * 60 * 60 * 1000;
 const userSessionLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const loginAttempts = new Map();
+const publicBaseUrl = String(process.env.PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '');
+const uploadDirectory = path.resolve(__dirname, process.env.UPLOAD_DIR || 'uploads');
+const imageExtensionByMime = new Map([
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/webp', '.webp'],
+]);
+
+// รูปที่ Admin อัปโหลดจะอยู่ใน uploads และใช้ชื่อสุ่มแทนชื่อไฟล์เดิม
+fs.mkdirSync(uploadDirectory, { recursive: true });
+const productImageStorage = multer.diskStorage({
+  destination: (_req, _file, callback) => callback(null, uploadDirectory),
+  filename: (_req, file, callback) => {
+    const extension = imageExtensionByMime.get(file.mimetype);
+    callback(null, `${Date.now()}-${crypto.randomBytes(12).toString('hex')}${extension}`);
+  },
+});
+const productImageUpload = multer({
+  storage: productImageStorage,
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (imageExtensionByMime.has(file.mimetype)) return callback(null, true);
+    const error = new Error('รองรับเฉพาะไฟล์ JPG, PNG หรือ WebP');
+    error.code = 'UNSUPPORTED_IMAGE_TYPE';
+    return callback(error);
+  },
+});
 
 // อ่านเว็บที่อนุญาตให้เรียก API จาก .env (CORS)
 const allowedOrigins = (process.env.CORS_ORIGINS || '')
@@ -31,6 +61,11 @@ app.use(cors({
   },
 }));
 app.use(express.json({ limit: '100kb' }));
+app.use('/uploads', express.static(uploadDirectory, {
+  dotfiles: 'deny',
+  index: false,
+  maxAge: '7d',
+}));
 app.disable('x-powered-by');
 
 // สร้าง Connection Pool ไปยัง Database เพื่อไม่ต้องเปิดการเชื่อมต่อใหม่ทุก Request
@@ -48,6 +83,29 @@ const pool = mysql.createPool({
 // เก็บ Token ใน DB เป็น SHA-256 แทนการเก็บ Token จริง
 function hashSessionToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function getPublicUploadUrl(req, filename) {
+  const requestBaseUrl = `${req.protocol}://${req.get('host')}`;
+  return `${publicBaseUrl || requestBaseUrl}/uploads/${encodeURIComponent(filename)}`;
+}
+
+// ลบเฉพาะไฟล์ชื่อที่ระบบสร้างเอง ป้องกันไม่ให้ URL ภายนอกไปแตะไฟล์อื่นบน Server
+async function deleteStoredProductImage(imageUrl) {
+  try {
+    const parsedUrl = new URL(String(imageUrl || ''));
+    const prefix = '/uploads/';
+    if (!parsedUrl.pathname.startsWith(prefix)) return;
+    if (publicBaseUrl && parsedUrl.origin !== new URL(publicBaseUrl).origin) return;
+
+    const filename = decodeURIComponent(parsedUrl.pathname.slice(prefix.length));
+    if (!/^\d+-[a-f0-9]{24}\.(jpg|png|webp)$/.test(filename)) return;
+    await fs.promises.unlink(path.join(uploadDirectory, filename));
+  } catch (error) {
+    if (error.code !== 'ENOENT' && error.name !== 'TypeError') {
+      console.error('Delete uploaded image error:', error.message);
+    }
+  }
 }
 
 // เอารหัสที่ผู้ใช้กรอกมาเทียบกับ scrypt hash ที่เก็บไว้ โดยเทียบแบบปลอดภัย
@@ -670,6 +728,23 @@ app.post('/api/admin/logout', requireAdmin, async (req, res) => {
   }
 });
 
+// รับรูปสินค้าจากหน้า Admin เท่านั้น จำกัด 1 รูปและไม่เกิน 5 MB
+app.post('/api/admin/uploads/product-image', requireAdmin, (req, res) => {
+  productImageUpload.single('image')(req, res, (error) => {
+    if (error) {
+      if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'รูปสินค้าต้องมีขนาดไม่เกิน 5 MB' });
+      }
+      return res.status(400).json({ error: error.message || 'อัปโหลดรูปสินค้าไม่สำเร็จ' });
+    }
+    if (!req.file) return res.status(400).json({ error: 'กรุณาเลือกไฟล์รูปสินค้า' });
+    return res.status(201).json({
+      image_url: getPublicUploadUrl(req, req.file.filename),
+      filename: req.file.filename,
+    });
+  });
+});
+
 // Admin เพิ่มสินค้าลง Inventory จริง
 app.post('/api/products', requireAdmin, async (req, res) => {
   const parsed = parseProduct(req.body);
@@ -699,6 +774,8 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
 
   const { product_name, description, price, image_url, sku, category } = parsed.product;
   try {
+    const [existingRows] = await pool.execute('SELECT image_url FROM Inventory WHERE id = ? LIMIT 1', [id]);
+    if (existingRows.length === 0) return res.status(404).json({ error: 'ไม่พบสินค้า' });
     const [result] = await pool.execute(
       `UPDATE Inventory
        SET product_name = ?, description = ?, price = ?, image_url = ?, sku = ?, category = ?
@@ -706,6 +783,7 @@ app.put('/api/products/:id', requireAdmin, async (req, res) => {
       [product_name, description, price, image_url, sku, category, id],
     );
     if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบสินค้า' });
+    if (existingRows[0].image_url !== image_url) await deleteStoredProductImage(existingRows[0].image_url);
     return res.json({ id, ...parsed.product });
   } catch (error) {
     console.error('Update product error:', error.message);
@@ -720,8 +798,11 @@ app.delete('/api/products/:id', requireAdmin, async (req, res) => {
   if (!Number.isInteger(id) || id < 1) return res.status(400).json({ error: 'Product ID ไม่ถูกต้อง' });
 
   try {
+    const [existingRows] = await pool.execute('SELECT image_url FROM Inventory WHERE id = ? LIMIT 1', [id]);
+    if (existingRows.length === 0) return res.status(404).json({ error: 'ไม่พบสินค้าที่ต้องการลบ' });
     const [result] = await pool.execute('DELETE FROM Inventory WHERE id = ?', [id]);
     if (result.affectedRows === 0) return res.status(404).json({ error: 'ไม่พบสินค้าที่ต้องการลบ' });
+    await deleteStoredProductImage(existingRows[0].image_url);
     return res.json({ deleted: true, id });
   } catch (error) {
     console.error('Delete product error:', error.message);
