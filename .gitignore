@@ -53,7 +53,7 @@ Desktop.ini
 .idea/
 
 # local env files and secrets
-.env
+# .env ใช้ส่งงานโดยเก็บเฉพาะค่าที่เซ็นเซอร์แล้ว ส่วนไฟล์ .env.* ยังไม่ขึ้น Git
 .env.*
 !.env.example
 
